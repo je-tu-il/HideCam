@@ -15,9 +15,10 @@ jobs:
       - name: Build app without signing
         run: |
           PROJECT_PATH=$(find . -name "*.xcodeproj" | head -n 1)
+          SCHEME=$(xcodebuild -project "$PROJECT_PATH" -list -json | jq -r '.project.schemes[0]')
           xcodebuild clean build \
             -project "$PROJECT_PATH" \
-            -scheme HideCam \
+            -scheme "$SCHEME" \
             -configuration Release \
             -sdk iphoneos \
             -derivedDataPath build_output \
@@ -29,10 +30,10 @@ jobs:
         run: |
           mkdir -p Payload
           cp -r build_output/Build/Products/Release-iphoneos/*.app Payload/
-          zip -r HideCam.ipa Payload
+          zip -r StealthRecorder.ipa Payload
 
       - name: Upload IPA Artifact
         uses: actions/upload-artifact@v4
         with:
-          name: HideCam-unsigned
-          path: HideCam.ipa
+          name: StealthRecorder-unsigned
+          path: StealthRecorder.ipa
