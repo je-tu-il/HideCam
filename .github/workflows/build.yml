@@ -14,8 +14,9 @@ jobs:
 
       - name: Build app without signing
         run: |
+          PROJECT_PATH=$(find . -name "*.xcodeproj" | head -n 1)
           xcodebuild clean build \
-            -project HideCam.xcodeproj \
+            -project "$PROJECT_PATH" \
             -scheme HideCam \
             -configuration Release \
             -sdk iphoneos \
@@ -27,7 +28,7 @@ jobs:
       - name: Package into IPA
         run: |
           mkdir -p Payload
-          cp -r build_output/Build/Products/Release-iphoneos/HideCam.app Payload/
+          cp -r build_output/Build/Products/Release-iphoneos/*.app Payload/
           zip -r HideCam.ipa Payload
 
       - name: Upload IPA Artifact
