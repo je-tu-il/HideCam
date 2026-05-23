@@ -15,8 +15,8 @@ jobs:
       - name: Build app without signing
         run: |
           xcodebuild clean build \
-            -project ios/StackLaunch.xcodeproj \
-            -scheme StackLaunch \
+            -project HideCam.xcodeproj \
+            -scheme HideCam \
             -configuration Release \
             -sdk iphoneos \
             -derivedDataPath build_output \
@@ -27,11 +27,11 @@ jobs:
       - name: Package into IPA
         run: |
           mkdir -p Payload
-          cp -r build_output/Build/Products/Release-iphoneos/StackLaunch.app Payload/
-          zip -r StackLaunch.ipa Payload
+          cp -r build_output/Build/Products/Release-iphoneos/HideCam.app Payload/
+          zip -r HideCam.ipa Payload
 
       - name: Upload IPA Artifact
         uses: actions/upload-artifact@v4
         with:
-          name: StackLaunch-unsigned
-          path: StackLaunch.ipa
+          name: HideCam-unsigned
+          path: HideCam.ipa
