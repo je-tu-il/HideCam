@@ -1,1 +1,10 @@
-/* Fichier non-texte ou éditeur introuvable */
+{
+  "$schema": "https://rork.com/schema/rork.json",
+  "apps": [
+    {
+      "name": "Stealth Recorder",
+      "path": "ios",
+      "framework": "swift"
+    }
+  ]
+}

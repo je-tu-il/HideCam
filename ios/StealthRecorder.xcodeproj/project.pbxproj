@@ -403,6 +403,8 @@
 				INFOPLIST_KEY_ITSAppUsesNonExemptEncryption = NO;
 				INFOPLIST_KEY_NSCameraUsageDescription = "Camera access is required to configure video capture based on the selected recording mode.";
 				INFOPLIST_KEY_NSMicrophoneUsageDescription = "Microphone access is required to configure audio recording.";
+				INFOPLIST_KEY_NSPhotoLibraryAddUsageDescription = "Photo library access is required to save completed recordings to Photos when selected.";
+				INFOPLIST_KEY_NSPhotoLibraryUsageDescription = "Photo library access is required to save completed recordings to Photos when selected.";
 				INFOPLIST_KEY_UIApplicationSceneManifest_Generation = YES;
 				INFOPLIST_KEY_UIApplicationSupportsIndirectInputEvents = YES;
 				INFOPLIST_KEY_UILaunchScreen_Generation = YES;
@@ -438,6 +440,8 @@
 				INFOPLIST_KEY_ITSAppUsesNonExemptEncryption = NO;
 				INFOPLIST_KEY_NSCameraUsageDescription = "Camera access is required to configure video capture based on the selected recording mode.";
 				INFOPLIST_KEY_NSMicrophoneUsageDescription = "Microphone access is required to configure audio recording.";
+				INFOPLIST_KEY_NSPhotoLibraryAddUsageDescription = "Photo library access is required to save completed recordings to Photos when selected.";
+				INFOPLIST_KEY_NSPhotoLibraryUsageDescription = "Photo library access is required to save completed recordings to Photos when selected.";
 				INFOPLIST_KEY_UIApplicationSceneManifest_Generation = YES;
 				INFOPLIST_KEY_UIApplicationSupportsIndirectInputEvents = YES;
 				INFOPLIST_KEY_UILaunchScreen_Generation = YES;
