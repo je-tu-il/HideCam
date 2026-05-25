@@ -7,6 +7,7 @@ struct SettingsView: View {
     @AppStorage(RecorderSettingsKeys.step1Action) private var step1Action: String = RecordingAction.frontVideo.rawValue
     @AppStorage(RecorderSettingsKeys.step2Action) private var step2Action: String = RecordingAction.backVideo.rawValue
     @AppStorage(RecorderSettingsKeys.step3Action) private var step3Action: String = RecordingAction.multiCam.rawValue
+    @AppStorage(RecorderSettingsKeys.showGallery) private var showGallery: Bool = false
 
     var body: some View {
         NavigationStack {
@@ -20,10 +21,10 @@ struct SettingsView: View {
                 }
 
                 Section("Actions par palier") {
-                    stepPicker(title: "Palier 0", selection: $step0Action)
-                    stepPicker(title: "Palier 1", selection: $step1Action)
-                    stepPicker(title: "Palier 2", selection: $step2Action)
-                    stepPicker(title: "Palier 3", selection: $step3Action)
+                    stepPicker(title: "Palier 0 (vol. 0.0)", selection: $step0Action)
+                    stepPicker(title: "Palier 1 (vol. 0.01–0.07)", selection: $step1Action)
+                    stepPicker(title: "Palier 2 (vol. 0.08–0.13)", selection: $step2Action)
+                    stepPicker(title: "Palier 3 (vol. 0.14–0.19)", selection: $step3Action)
                 }
 
                 Section("Destination") {
@@ -33,8 +34,19 @@ struct SettingsView: View {
                         }
                     }
                 }
+
+                Section("Galerie") {
+                    Toggle("Accès galerie (appui long)", isOn: $showGallery)
+                }
+
+                Section("Enregistrement") {
+                    Text("Les enregistrements sont découpés en segments de 3 secondes et fusionnés automatiquement. L'enregistrement continue en arrière-plan.")
+                        .font(.caption)
+                        .foregroundStyle(.secondary)
+                }
             }
             .navigationTitle("Configuration")
+            .navigationBarTitleDisplayMode(.large)
         }
     }
 

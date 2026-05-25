@@ -76,16 +76,19 @@ nonisolated enum RecorderSettingsKeys {
     static let step1Action: String = "recorder.step1Action"
     static let step2Action: String = "recorder.step2Action"
     static let step3Action: String = "recorder.step3Action"
+    static let showGallery: String = "recorder.showGallery"
 }
 
 nonisolated struct RecorderSettings: Sendable {
     let videoQuality: VideoQuality
     let saveDestination: SaveDestination
     let stepActions: [Int: RecordingAction]
+    let showGallery: Bool
 
     static func load(from defaults: UserDefaults = .standard) -> RecorderSettings {
         let videoQuality: VideoQuality = VideoQuality(rawValue: defaults.string(forKey: RecorderSettingsKeys.videoQuality) ?? "") ?? .high
         let saveDestination: SaveDestination = SaveDestination(rawValue: defaults.string(forKey: RecorderSettingsKeys.saveDestination) ?? "") ?? .documents
+        let showGallery: Bool = defaults.bool(forKey: RecorderSettingsKeys.showGallery)
 
         let actions: [Int: RecordingAction] = [
             0: action(for: RecorderSettingsKeys.step0Action, defaultAction: .audio, defaults: defaults),
@@ -94,7 +97,7 @@ nonisolated struct RecorderSettings: Sendable {
             3: action(for: RecorderSettingsKeys.step3Action, defaultAction: .multiCam, defaults: defaults)
         ]
 
-        return RecorderSettings(videoQuality: videoQuality, saveDestination: saveDestination, stepActions: actions)
+        return RecorderSettings(videoQuality: videoQuality, saveDestination: saveDestination, stepActions: actions, showGallery: showGallery)
     }
 
     private static func action(for key: String, defaultAction: RecordingAction, defaults: UserDefaults) -> RecordingAction {
