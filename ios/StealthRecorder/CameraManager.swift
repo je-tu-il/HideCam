@@ -19,6 +19,7 @@ final class CameraManager: NSObject, AVCaptureFileOutputRecordingDelegate, CLLoc
 
     private(set) var isRecording: Bool = false
     private(set) var recordingStartedAt: Date?
+    private(set) var wasRecordingBeforeBackground: Bool = false
     private var modelContext: ModelContext?
 
     // MARK: - Private capture state
@@ -37,6 +38,7 @@ final class CameraManager: NSObject, AVCaptureFileOutputRecordingDelegate, CLLoc
     private var primaryOutput: AVCaptureMovieFileOutput? { activeOutputs.first }
 
     private var saveDestination: SaveDestination = .documents
+    private var showInFiles: Bool = true
     private var currentAction: RecordingAction?
     private var bgTaskID: UIBackgroundTaskIdentifier = .invalid
 
@@ -68,7 +70,20 @@ final class CameraManager: NSObject, AVCaptureFileOutputRecordingDelegate, CLLoc
     }()
     private var recordingLocation: CLLocation?
 
-    // MARK: - Temp directory
+    // MARK: - Storage directories
+
+    /// Directory respecting the showInFiles setting.
+    /// When true: Documents (visible in Files app). When false: Application Support (private).
+    private var storageDirectory: URL {
+        if showInFiles {
+            return FileManager.default.urls(for: .documentDirectory, in: .userDomainMask).first!
+        } else {
+            let privateDir = FileManager.default.urls(for: .applicationSupportDirectory, in: .userDomainMask).first!
+                .appendingPathComponent("Recordings", isDirectory: true)
+            try? FileManager.default.createDirectory(at: privateDir, withIntermediateDirectories: true)
+            return privateDir
+        }
+    }
 
     private var chunksDirectory: URL {
         let tmp = FileManager.default.temporaryDirectory
@@ -89,6 +104,7 @@ final class CameraManager: NSObject, AVCaptureFileOutputRecordingDelegate, CLLoc
                 try await requestCapturePermissions()
                 let settings = RecorderSettings.load()
                 saveDestination = settings.saveDestination
+                showInFiles = settings.showInFiles
                 let volume = AVAudioSession.sharedInstance().outputVolume
                 let action = try recordingAction(for: volume, settings: settings)
                 try await configureAndStart(action: action, settings: settings)
@@ -99,6 +115,7 @@ final class CameraManager: NSObject, AVCaptureFileOutputRecordingDelegate, CLLoc
     }
 
     func stopRecordingAndFinalize() async {
+        wasRecordingBeforeBackground = isRecording
         shouldContinueRecording = false
         finishedOutputCount = 0
 
@@ -226,6 +243,7 @@ final class CameraManager: NSObject, AVCaptureFileOutputRecordingDelegate, CLLoc
                     Task { @MainActor in
                         self.isRecording = true
                         self.recordingStartedAt = Date()
+                        self.wasRecordingBeforeBackground = false
                     }
 
                     cont.resume()
@@ -303,12 +321,13 @@ final class CameraManager: NSObject, AVCaptureFileOutputRecordingDelegate, CLLoc
             let outputID = ObjectIdentifier(output)
             guard let chunks = chunkLists[outputID], !chunks.isEmpty else { continue }
 
+            // Label each output: for multi-cam, distinguish front/back
             let label: String = {
                 if activeOutputs.count > 1 {
-                    for connection in output.connections {
-                        if connection.inputPorts.contains(where: { $0.mediaType == .video }) {
-                            return connection.isVideoMirrored ? "front" : "back"
-                        }
+                    if let videoConnection = output.connections.first(where: {
+                        $0.inputPorts.contains(where: { $0.mediaType == .video })
+                    }) {
+                        return videoConnection.isVideoMirrored ? "front" : "back"
                     }
                 }
                 return action.rawValue
@@ -316,14 +335,9 @@ final class CameraManager: NSObject, AVCaptureFileOutputRecordingDelegate, CLLoc
 
             guard let mergedURL = await mergeChunks(chunks) else { continue }
 
-            // Rename with label
-            let finalURL = chunksDirectory
-                .deletingLastPathComponent() // Actually we want documents
-                .appendingPathComponent("\(label)-\(UUID().uuidString).mov")
-
-            // Move to documents
-            let documentsURL = FileManager.default.urls(for: .documentDirectory, in: .userDomainMask).first!
-            let destinationURL = documentsURL.appendingPathComponent(finalURL.lastPathComponent)
+            let destinationURL = storageDirectory.appendingPathComponent(
+                "\(label)-\(UUID().uuidString).mov"
+            )
 
             do {
                 if FileManager.default.fileExists(atPath: destinationURL.path) {
@@ -429,9 +443,18 @@ final class CameraManager: NSObject, AVCaptureFileOutputRecordingDelegate, CLLoc
             action: currentAction
         )
 
-        // If destination is photo library, save there too
+        // If destination is photo library, save there too.
+        // Audio-only files get converted to video (black frame) for Photos compatibility.
+        // Multi-cam already saves each output as a separate file.
         if saveDestination == .photoLibrary {
-            await saveToPhotoLibrary(fileURL)
+            if currentAction == .audio {
+                if let videoURL = await convertAudioToVideo(fileURL) {
+                    await saveToPhotoLibrary(videoURL)
+                    try? FileManager.default.removeItem(at: videoURL)
+                }
+            } else {
+                await saveToPhotoLibrary(fileURL)
+            }
         }
     }
 
@@ -488,6 +511,143 @@ final class CameraManager: NSObject, AVCaptureFileOutputRecordingDelegate, CLLoc
         }
     }
 
+    // MARK: - Audio-to-video conversion (Photos compatibility)
+
+    /// Converts an audio-only .mov to a video with a black frame so Photos can play it.
+    private func convertAudioToVideo(_ audioURL: URL) async -> URL? {
+        let asset = AVURLAsset(url: audioURL)
+        let duration: CMTime
+        do {
+            duration = try await asset.load(.duration)
+        } catch {
+            return nil
+        }
+
+        let composition = AVMutableComposition()
+
+        // Copy audio track
+        if let audioTrack = try? await asset.loadTracks(withMediaType: .audio).first,
+           let compAudioTrack = composition.addMutableTrack(
+               withMediaType: .audio,
+               preferredTrackID: kCMPersistentTrackID_Invalid
+           ) {
+            try? compAudioTrack.insertTimeRange(
+                CMTimeRange(start: .zero, duration: duration),
+                of: audioTrack,
+                at: .zero
+            )
+        }
+
+        // Create a black video track
+        guard let videoTrack = composition.addMutableTrack(
+            withMediaType: .video,
+            preferredTrackID: kCMPersistentTrackID_Invalid
+        ) else { return nil }
+
+        // Generate a black frame video asset matching the audio duration
+        let tempDir = FileManager.default.temporaryDirectory
+        let blackVideoURL = tempDir.appendingPathComponent("blackframe-\(UUID().uuidString).mp4")
+
+        guard let blackAsset = await writeImageAsVideo(duration: duration, outputURL: blackVideoURL),
+              let blackTrack = try? await blackAsset.loadTracks(withMediaType: .video).first else {
+            return nil
+        }
+
+        try? videoTrack.insertTimeRange(
+            CMTimeRange(start: .zero, duration: duration),
+            of: blackTrack,
+            at: .zero
+        )
+        videoTrack.preferredTransform = blackTrack.preferredTransform
+
+        // Export composition
+        let outputURL = tempDir.appendingPathComponent("audio-as-video-\(UUID().uuidString).mp4")
+        if FileManager.default.fileExists(atPath: outputURL.path) {
+            try? FileManager.default.removeItem(at: outputURL)
+        }
+
+        guard let exporter = AVAssetExportSession(
+            asset: composition,
+            presetName: AVAssetExportPresetMediumQuality
+        ) else { return nil }
+
+        exporter.outputURL = outputURL
+        exporter.outputFileType = .mp4
+        exporter.shouldOptimizeForNetworkUse = false
+
+        await exporter.export()
+
+        if exporter.status == .completed {
+            return outputURL
+        }
+        debugPrint("Audio-to-video conversion failed: \(exporter.error?.localizedDescription ?? "unknown")")
+        return nil
+    }
+
+    /// Writes a black frame as an mp4 video of the given duration.
+    private func writeImageAsVideo(duration: CMTime, outputURL: URL) async -> AVURLAsset? {
+        if FileManager.default.fileExists(atPath: outputURL.path) {
+            try? FileManager.default.removeItem(at: outputURL)
+        }
+
+        guard let writer = try? AVAssetWriter(outputURL: outputURL, fileType: .mp4) else { return nil }
+
+        let videoSettings: [String: Any] = [
+            AVVideoCodecKey: AVVideoCodecType.h264,
+            AVVideoWidthKey: 640,
+            AVVideoHeightKey: 480
+        ]
+
+        let videoInput = AVAssetWriterInput(mediaType: .video, outputSettings: videoSettings)
+        videoInput.expectsMediaDataInRealTime = false
+
+        let adaptor = AVAssetWriterInputPixelBufferAdaptor(
+            assetWriterInput: videoInput,
+            sourcePixelBufferAttributes: [
+                kCVPixelBufferPixelFormatTypeKey as String: kCVPixelFormatType_32ARGB,
+                kCVPixelBufferWidthKey as String: 640,
+                kCVPixelBufferHeightKey as String: 480
+            ]
+        )
+
+        guard writer.canAdd(videoInput) else { return nil }
+        writer.add(videoInput)
+        writer.startWriting()
+        writer.startSession(atSourceTime: .zero)
+
+        // Write a black pixel buffer at time zero
+        let semaphore = DispatchSemaphore(value: 0)
+        videoInput.requestMediaDataWhenReady(on: DispatchQueue(label: "video-writer")) {
+            if videoInput.isReadyForMoreMediaData {
+                var pb: CVPixelBuffer?
+                CVPixelBufferCreate(
+                    kCFAllocatorDefault, 640, 480,
+                    kCVPixelFormatType_32ARGB,
+                    [kCVPixelBufferIOSurfacePropertiesKey as String: [:]] as CFDictionary,
+                    &pb
+                )
+                if let pb {
+                    CVPixelBufferLockBaseAddress(pb, [])
+                    if let baseAddress = CVPixelBufferGetBaseAddress(pb) {
+                        memset(baseAddress, 0, 640 * 480 * 4)
+                    }
+                    CVPixelBufferUnlockBaseAddress(pb, [])
+                    adaptor.append(pb, withPresentationTime: .zero)
+                }
+                videoInput.markAsFinished()
+                semaphore.signal()
+            }
+        }
+        semaphore.wait()
+
+        await writer.finishWriting()
+
+        if writer.status == .completed {
+            return AVURLAsset(url: outputURL)
+        }
+        return nil
+    }
+
     // MARK: - Teardown
 
     private func teardownSession() async {
@@ -516,7 +676,7 @@ final class CameraManager: NSObject, AVCaptureFileOutputRecordingDelegate, CLLoc
         }
     }
 
-    // MARK: - Session factories (unchanged core logic)
+    // MARK: - Session factories
 
     private nonisolated func makeSession(for action: RecordingAction, settings: RecorderSettings) throws -> ConfiguredCaptureSession {
         switch action {

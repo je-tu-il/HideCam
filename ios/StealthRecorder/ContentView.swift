@@ -72,7 +72,6 @@ struct ContentView: View {
                     .fill(.red)
                     .frame(width: 10, height: 10)
                     .opacity(pulsingOpacity)
-                    .animation(.easeInOut(duration: 1.0).repeatForever(autoreverses: true), value: pulsingOpacity)
                     .padding(.top, 16)
                     .padding(.trailing, 16)
             }
@@ -102,8 +101,12 @@ struct ContentView: View {
                 await cameraManager.stopRecordingAndFinalize()
             }
         case .active:
-            // Recover any orphaned chunks from a previous kill
+            // Recover orphaned chunks
             cameraManager.recoverOrphanedChunks()
+            // If we were recording before backgrounding, restart based on current volume
+            if cameraManager.wasRecordingBeforeBackground {
+                cameraManager.startFromCurrentSystemVolume()
+            }
         default:
             break
         }

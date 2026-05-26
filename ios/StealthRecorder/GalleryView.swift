@@ -1,3 +1,4 @@
+import AVFoundation
 import AVKit
 import SwiftData
 import SwiftUI
@@ -9,7 +10,9 @@ struct GalleryView: View {
 
     @State private var selectedRecording: RecordingEntry?
     @State private var player: AVPlayer?
+    @State private var audioPlayer: AVAudioPlayer?
     @State private var showPlayer = false
+    @State private var isAudioOnly = false
     @State private var showDeleteConfirm = false
     @State private var recordingToDelete: RecordingEntry?
 
@@ -30,7 +33,11 @@ struct GalleryView: View {
                 }
             }
             .fullScreenCover(isPresented: $showPlayer) {
-                playerView
+                if isAudioOnly {
+                    audioPlayerView
+                } else {
+                    videoPlayerView
+                }
             }
             .alert("Supprimer l'enregistrement ?", isPresented: $showDeleteConfirm) {
                 Button("Annuler", role: .cancel) {}
@@ -46,6 +53,8 @@ struct GalleryView: View {
             .onDisappear {
                 player?.pause()
                 player = nil
+                audioPlayer?.stop()
+                audioPlayer = nil
             }
         }
     }
@@ -150,9 +159,9 @@ struct GalleryView: View {
         .padding(.vertical, 6)
     }
 
-    // MARK: - Player
+    // MARK: - Video player
 
-    private var playerView: some View {
+    private var videoPlayerView: some View {
         Group {
             if let player {
                 VideoPlayer(player: player)
@@ -174,15 +183,98 @@ struct GalleryView: View {
         }
     }
 
+    // MARK: - Audio player (for audio-only recordings)
+
+    private var audioPlayerView: some View {
+        ZStack {
+            Color.black.edgesIgnoringSafeArea(.all)
+
+            VStack(spacing: 24) {
+                // Close button
+                HStack {
+                    Button {
+                        audioPlayer?.stop()
+                        audioPlayer = nil
+                        showPlayer = false
+                    } label: {
+                        Image(systemName: "xmark.circle.fill")
+                            .font(.title)
+                            .foregroundStyle(.white)
+                            .shadow(radius: 4)
+                    }
+                    Spacer()
+                }
+                .padding(.horizontal, 24)
+                .padding(.top, 16)
+
+                Spacer()
+
+                // Audio waveform visualization (animated bars)
+                HStack(spacing: 4) {
+                    ForEach(0..<20, id: \.self) { i in
+                        RoundedRectangle(cornerRadius: 2)
+                            .fill(.white.opacity(0.7))
+                            .frame(width: 4, height: audioBarHeight(for: i))
+                    }
+                }
+                .frame(height: 80)
+
+                Text(selectedRecording?.fileName ?? "Audio")
+                    .font(.headline)
+                    .foregroundStyle(.white)
+
+                Spacer()
+
+                // Play/Pause
+                Button {
+                    if let ap = audioPlayer, ap.isPlaying {
+                        ap.pause()
+                    } else {
+                        audioPlayer?.play()
+                    }
+                } label: {
+                    Image(systemName: (audioPlayer?.isPlaying ?? false) ? "pause.circle.fill" : "play.circle.fill")
+                        .font(.system(size: 64))
+                        .foregroundStyle(.white)
+                }
+
+                Spacer()
+            }
+        }
+    }
+
+    private func audioBarHeight(for index: Int) -> CGFloat {
+        let heights: [CGFloat] = [20, 35, 50, 30, 60, 25, 45, 55, 40, 70, 50, 35, 60, 30, 45, 25, 55, 40, 35, 50]
+        return heights[index % heights.count]
+    }
+
     // MARK: - Actions
 
     private func playRecording(_ entry: RecordingEntry) {
         let url = URL(fileURLWithPath: entry.filePath)
         guard FileManager.default.fileExists(atPath: url.path) else { return }
-        let player = AVPlayer(url: url)
-        self.player = player
-        showPlayer = true
-        player.play()
+
+        selectedRecording = entry
+
+        if entry.actionType == "audio" {
+            // Audio-only: use AVAudioPlayer
+            isAudioOnly = true
+            do {
+                audioPlayer = try AVAudioPlayer(contentsOf: url)
+                audioPlayer?.prepareToPlay()
+                audioPlayer?.play()
+            } catch {
+                debugPrint("Audio playback failed: \(error.localizedDescription)")
+            }
+            showPlayer = true
+        } else {
+            // Video: use AVPlayer via VideoPlayer
+            isAudioOnly = false
+            let player = AVPlayer(url: url)
+            self.player = player
+            showPlayer = true
+            player.play()
+        }
     }
 
     private func deleteRecording(_ entry: RecordingEntry) {

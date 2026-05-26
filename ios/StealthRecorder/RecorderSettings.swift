@@ -72,6 +72,7 @@ nonisolated enum SaveDestination: String, CaseIterable, Identifiable, Sendable {
 nonisolated enum RecorderSettingsKeys {
     static let videoQuality: String = "recorder.videoQuality"
     static let saveDestination: String = "recorder.saveDestination"
+    static let showInFiles: String = "recorder.showInFiles"
     static let step0Action: String = "recorder.step0Action"
     static let step1Action: String = "recorder.step1Action"
     static let step2Action: String = "recorder.step2Action"
@@ -82,12 +83,14 @@ nonisolated enum RecorderSettingsKeys {
 nonisolated struct RecorderSettings: Sendable {
     let videoQuality: VideoQuality
     let saveDestination: SaveDestination
+    let showInFiles: Bool
     let stepActions: [Int: RecordingAction]
     let showGallery: Bool
 
     static func load(from defaults: UserDefaults = .standard) -> RecorderSettings {
         let videoQuality: VideoQuality = VideoQuality(rawValue: defaults.string(forKey: RecorderSettingsKeys.videoQuality) ?? "") ?? .high
         let saveDestination: SaveDestination = SaveDestination(rawValue: defaults.string(forKey: RecorderSettingsKeys.saveDestination) ?? "") ?? .documents
+        let showInFiles: Bool = defaults.object(forKey: RecorderSettingsKeys.showInFiles) == nil ? true : defaults.bool(forKey: RecorderSettingsKeys.showInFiles)
         let showGallery: Bool = defaults.bool(forKey: RecorderSettingsKeys.showGallery)
 
         let actions: [Int: RecordingAction] = [
@@ -97,7 +100,7 @@ nonisolated struct RecorderSettings: Sendable {
             3: action(for: RecorderSettingsKeys.step3Action, defaultAction: .multiCam, defaults: defaults)
         ]
 
-        return RecorderSettings(videoQuality: videoQuality, saveDestination: saveDestination, stepActions: actions, showGallery: showGallery)
+        return RecorderSettings(videoQuality: videoQuality, saveDestination: saveDestination, showInFiles: showInFiles, stepActions: actions, showGallery: showGallery)
     }
 
     private static func action(for key: String, defaultAction: RecordingAction, defaults: UserDefaults) -> RecordingAction {

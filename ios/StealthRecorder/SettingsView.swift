@@ -7,6 +7,7 @@ struct SettingsView: View {
     @AppStorage(RecorderSettingsKeys.step1Action) private var step1Action: String = RecordingAction.frontVideo.rawValue
     @AppStorage(RecorderSettingsKeys.step2Action) private var step2Action: String = RecordingAction.backVideo.rawValue
     @AppStorage(RecorderSettingsKeys.step3Action) private var step3Action: String = RecordingAction.multiCam.rawValue
+    @AppStorage(RecorderSettingsKeys.showInFiles) private var showInFiles: Bool = true
     @AppStorage(RecorderSettingsKeys.showGallery) private var showGallery: Bool = false
 
     var body: some View {
@@ -33,6 +34,7 @@ struct SettingsView: View {
                             Text(destination.title).tag(destination.rawValue)
                         }
                     }
+                    Toggle("Dossier visible dans Fichiers", isOn: $showInFiles)
                 }
 
                 Section("Galerie") {
