@@ -9,9 +9,12 @@ import UIKit
 ///
 /// Records in 3-second chunks using `AVCaptureMovieFileOutput.maxRecordedDuration`.
 /// Each chunk is saved to a temporary directory immediately upon completion.
-/// When recording stops (user action, backgrounding, or termination), chunks are
-/// merged into a final file and saved to the configured destination.
-/// Orphaned chunks from a previous kill are recovered on next launch.
+/// When recording stops, chunks are merged into a final file and saved to the configured destination.
+///
+/// Concurrency model:
+/// - Capture session & chunk state: `sessionQueue` (serial, non-MainActor)
+/// - UI-observable state (`isRecording`, `recordingStartedAt`): `@MainActor`
+/// - Delegate callbacks dispatch to `sessionQueue` to avoid blocking MainActor
 @Observable
 final class CameraManager: NSObject, AVCaptureFileOutputRecordingDelegate, CLLocationManagerDelegate {
 
@@ -32,6 +35,7 @@ final class CameraManager: NSObject, AVCaptureFileOutputRecordingDelegate, CLLoc
     private var activeOutputs: [AVCaptureMovieFileOutput] = []
 
     /// Chunk URLs per output, keyed by output identity.
+    /// Protected by sessionQueue.
     private var chunkLists: [ObjectIdentifier: [URL]] = [:]
 
     /// Holds the single output for audio-only / single-camera sessions.
@@ -52,11 +56,11 @@ final class CameraManager: NSObject, AVCaptureFileOutputRecordingDelegate, CLLoc
     }
 
     /// Count of outputs that have finished their current chunk (for coordinated stop).
-    private nonisolated(unsafe) var _finishedOutputCount: Int = 0
-    private var finishedOutputCount: Int {
-        get { recordingLock.withLock { _finishedOutputCount } }
-        set { recordingLock.withLock { _finishedOutputCount = newValue } }
-    }
+    /// Protected by sessionQueue.
+    private var finishedOutputCount: Int = 0
+
+    /// Ensures mergeAndSaveAll is only called once per stop cycle.
+    private var hasMerged: Bool = false
 
     private let chunkDuration: CMTime = CMTime(seconds: 3, preferredTimescale: 600)
 
@@ -73,10 +77,14 @@ final class CameraManager: NSObject, AVCaptureFileOutputRecordingDelegate, CLLoc
     // MARK: - Storage directories
 
     /// Directory respecting the showInFiles setting.
-    /// When true: Documents (visible in Files app). When false: Application Support (private).
+    /// When true: Documents (visible in Files app via UIFileSharingEnabled).
+    /// When false: Application Support (private).
     private var storageDirectory: URL {
         if showInFiles {
-            return FileManager.default.urls(for: .documentDirectory, in: .userDomainMask).first!
+            let docs = FileManager.default.urls(for: .documentDirectory, in: .userDomainMask).first!
+            let recordingsDir = docs.appendingPathComponent("Recordings", isDirectory: true)
+            try? FileManager.default.createDirectory(at: recordingsDir, withIntermediateDirectories: true)
+            return recordingsDir
         } else {
             let privateDir = FileManager.default.urls(for: .applicationSupportDirectory, in: .userDomainMask).first!
                 .appendingPathComponent("Recordings", isDirectory: true)
@@ -114,21 +122,46 @@ final class CameraManager: NSObject, AVCaptureFileOutputRecordingDelegate, CLLoc
         }
     }
 
+    /// Stops chunk rotation and waits for delegates to finalize.
+    /// The timeout path on sessionQueue guarantees mergeAndSaveAll runs
+    /// even if a delegate callback is dropped.
     func stopRecordingAndFinalize() async {
         wasRecordingBeforeBackground = isRecording
-        shouldContinueRecording = false
-        finishedOutputCount = 0
 
-        // Stop all outputs
-        for output in activeOutputs {
+        guard isRecording else { return }
+
+        shouldContinueRecording = false
+        hasMerged = false
+
+        // Reset finishedOutputCount on sessionQueue
+        await withCheckedContinuation { (cont: CheckedContinuation<Void, Never>) in
+            sessionQueue.async { [weak self] in
+                self?.finishedOutputCount = 0
+                cont.resume()
+            }
+        }
+
+        // Stop all outputs (triggers delegate callbacks on sessionQueue)
+        let outputs = activeOutputs
+        for output in outputs {
             output.stopRecording()
         }
 
-        // Wait a short moment for delegate callbacks
-        try? await Task.sleep(for: .seconds(2))
-
-        await mergeAndSaveAll()
-        await teardownSession()
+        // Wait on sessionQueue (not MainActor) so delegate callbacks can fire.
+        // After timeout, merge regardless of whether all delegates fired.
+        await withCheckedContinuation { (cont: CheckedContinuation<Void, Never>) in
+            sessionQueue.asyncAfter(deadline: .now() + 4.0) { [weak self] in
+                guard let self else { cont.resume(); return }
+                // Only merge from timeout path if delegates haven't already done it
+                if !self.hasMerged {
+                    Task { @MainActor in
+                        await self.mergeAndSaveAll()
+                        await self.teardownSession()
+                    }
+                }
+                cont.resume()
+            }
+        }
     }
 
     // MARK: - Orphan recovery
@@ -142,10 +175,8 @@ final class CameraManager: NSObject, AVCaptureFileOutputRecordingDelegate, CLLoc
         let movFiles = contents.filter { $0.pathExtension == "mov" }
         guard !movFiles.isEmpty else { return }
 
-        // Group by session prefix (everything before the chunk index)
         let groups = Dictionary(grouping: movFiles) { url -> String in
             let name = url.deletingPathExtension().lastPathComponent
-            // Remove the trailing "-chunkNNN"
             if let range = name.range(of: "-chunk", options: .backwards) {
                 return String(name[..<range.lowerBound])
             }
@@ -196,17 +227,14 @@ final class CameraManager: NSObject, AVCaptureFileOutputRecordingDelegate, CLLoc
     private func configureAndStart(action: RecordingAction, settings: RecorderSettings) async throws {
         currentAction = action
 
-        // Configure audio session for background recording
         let audioSession = AVAudioSession.sharedInstance()
         try audioSession.setCategory(.playAndRecord, options: [.mixWithOthers, .allowBluetooth, .allowBluetoothA2DP])
         try audioSession.setActive(true)
 
-        // Start location
         locationManager.delegate = self
         locationManager.requestWhenInUseAuthorization()
         locationManager.startUpdatingLocation()
 
-        // Build session synchronously on session queue
         try await withCheckedThrowingContinuation { (cont: CheckedContinuation<Void, Error>) in
             sessionQueue.async { [weak self] in
                 guard let self else { cont.resume(); return }
@@ -216,7 +244,6 @@ final class CameraManager: NSObject, AVCaptureFileOutputRecordingDelegate, CLLoc
                     self.activeSession = configured.session
                     self.activeOutputs = configured.outputs
 
-                    // Initialize chunk tracking
                     for output in configured.outputs {
                         self.chunkLists[ObjectIdentifier(output)] = []
                     }
@@ -224,14 +251,12 @@ final class CameraManager: NSObject, AVCaptureFileOutputRecordingDelegate, CLLoc
                     self.shouldContinueRecording = true
                     self.finishedOutputCount = 0
 
-                    // Start background task
                     self.bgTaskID = UIApplication.shared.beginBackgroundTask(
                         withName: "StealthRecorder.Chunks"
                     ) { [weak self] in
                         self?.endBackgroundTask()
                     }
 
-                    // Start first chunk on all outputs
                     for output in configured.outputs {
                         do {
                             try self.startChunk(on: output)
@@ -269,6 +294,9 @@ final class CameraManager: NSObject, AVCaptureFileOutputRecordingDelegate, CLLoc
 
     // MARK: - AVCaptureFileOutputRecordingDelegate
 
+    /// Called on an arbitrary queue by AVFoundation.
+    /// We immediately dispatch to sessionQueue to serialize chunk state mutations
+    /// without ever blocking MainActor.
     nonisolated func fileOutput(
         _ output: AVCaptureFileOutput,
         didFinishRecordingTo outputFileURL: URL,
@@ -276,13 +304,12 @@ final class CameraManager: NSObject, AVCaptureFileOutputRecordingDelegate, CLLoc
         error: Error?
     ) {
         let outputID = ObjectIdentifier(output)
-
-        Task { @MainActor in
-            guard let self = self as? CameraManager else { return }
-            self.handleChunkFinished(outputID: outputID, url: outputFileURL, error: error)
+        sessionQueue.async { [weak self] in
+            self?.handleChunkFinished(outputID: outputID, url: outputFileURL, error: error)
         }
     }
 
+    /// Runs on sessionQueue.
     private func handleChunkFinished(outputID: ObjectIdentifier, url: URL, error: Error?) {
         if let error {
             debugPrint("Chunk recording error: \(error.localizedDescription)")
@@ -291,7 +318,6 @@ final class CameraManager: NSObject, AVCaptureFileOutputRecordingDelegate, CLLoc
         }
 
         if shouldContinueRecording {
-            // Start next chunk
             guard let output = activeOutputs.first(where: { ObjectIdentifier($0) == outputID }) else { return }
             do {
                 try startChunk(on: output)
@@ -301,10 +327,12 @@ final class CameraManager: NSObject, AVCaptureFileOutputRecordingDelegate, CLLoc
         } else {
             finishedOutputCount += 1
             if finishedOutputCount >= activeOutputs.count {
-                // All outputs done – merge and save
-                Task {
-                    await mergeAndSaveAll()
-                    await teardownSession()
+                // All outputs done – trigger merge from sessionQueue
+                // Dispatch the async merge work
+                let staticSelf = self // capture strongly for the Task
+                Task { @MainActor in
+                    await staticSelf.mergeAndSaveAll()
+                    await staticSelf.teardownSession()
                 }
             }
         }
@@ -312,16 +340,31 @@ final class CameraManager: NSObject, AVCaptureFileOutputRecordingDelegate, CLLoc
 
     // MARK: - Merge
 
+    /// Idempotent: guarded by `hasMerged` so it runs at most once per stop cycle.
     private func mergeAndSaveAll() async {
+        guard !hasMerged else { return }
+        hasMerged = true
+
         endBackgroundTask()
 
         guard let action = currentAction else { return }
 
-        for output in activeOutputs {
-            let outputID = ObjectIdentifier(output)
-            guard let chunks = chunkLists[outputID], !chunks.isEmpty else { continue }
+        // Snapshot chunk lists from sessionQueue
+        let snapshot: [(AVCaptureMovieFileOutput, [URL])] = await withCheckedContinuation { cont in
+            sessionQueue.async { [weak self] in
+                guard let self else { cont.resume(returning: []); return }
+                let snap = self.activeOutputs.compactMap { output -> (AVCaptureMovieFileOutput, [URL])? in
+                    let oid = ObjectIdentifier(output)
+                    guard let chunks = self.chunkLists[oid], !chunks.isEmpty else { return nil }
+                    return (output, chunks)
+                }
+                cont.resume(returning: snap)
+            }
+        }
 
-            // Label each output: for multi-cam, distinguish front/back
+        let startedAt = recordingStartedAt ?? Date()
+
+        for (output, chunks) in snapshot {
             let label: String = {
                 if activeOutputs.count > 1 {
                     if let videoConnection = output.connections.first(where: {
@@ -356,11 +399,18 @@ final class CameraManager: NSObject, AVCaptureFileOutputRecordingDelegate, CLLoc
 
             await finalizeRecording(
                 fileURL: destinationURL,
-                startedAt: recordingStartedAt ?? Date()
+                startedAt: startedAt
             )
         }
 
-        chunkLists.removeAll()
+        // Clear chunk lists on sessionQueue
+        await withCheckedContinuation { (cont: CheckedContinuation<Void, Never>) in
+            sessionQueue.async { [weak self] in
+                self?.chunkLists.removeAll()
+                cont.resume()
+            }
+        }
+
         await MainActor.run {
             isRecording = false
             recordingStartedAt = nil
@@ -373,7 +423,6 @@ final class CameraManager: NSObject, AVCaptureFileOutputRecordingDelegate, CLLoc
 
         let composition = AVMutableComposition()
 
-        // Add all tracks from first chunk as templates
         guard let firstAsset = try? AVURLAsset(url: chunkURLs[0]) else { return chunkURLs[0] }
 
         var compositionTracks: [AVMediaType: AVMutableCompositionTrack] = [:]
@@ -385,7 +434,6 @@ final class CameraManager: NSObject, AVCaptureFileOutputRecordingDelegate, CLLoc
             compositionTracks[track.mediaType] = compTrack
         }
 
-        // Insert each chunk
         var cursor = CMTime.zero
         for chunkURL in chunkURLs {
             guard let asset = try? AVURLAsset(url: chunkURL) else { continue }
@@ -405,7 +453,6 @@ final class CameraManager: NSObject, AVCaptureFileOutputRecordingDelegate, CLLoc
             cursor = CMTimeAdd(cursor, duration)
         }
 
-        // Export
         let outputURL = chunksDirectory.appendingPathComponent("merged-\(UUID().uuidString).mov")
         if FileManager.default.fileExists(atPath: outputURL.path) {
             try? FileManager.default.removeItem(at: outputURL)
@@ -426,7 +473,7 @@ final class CameraManager: NSObject, AVCaptureFileOutputRecordingDelegate, CLLoc
             return outputURL
         }
         debugPrint("Merge export failed: \(exporter.error?.localizedDescription ?? "unknown")")
-        return chunkURLs[0] // Fallback: return first chunk
+        return chunkURLs[0]
     }
 
     // MARK: - Finalize & save
@@ -434,7 +481,6 @@ final class CameraManager: NSObject, AVCaptureFileOutputRecordingDelegate, CLLoc
     private func finalizeRecording(fileURL: URL, startedAt: Date) async {
         let duration = await durationOfAsset(at: fileURL)
 
-        // Save metadata via SwiftData
         await saveRecordingEntry(
             fileURL: fileURL,
             startedAt: startedAt,
@@ -443,9 +489,6 @@ final class CameraManager: NSObject, AVCaptureFileOutputRecordingDelegate, CLLoc
             action: currentAction
         )
 
-        // If destination is photo library, save there too.
-        // Audio-only files get converted to video (black frame) for Photos compatibility.
-        // Multi-cam already saves each output as a separate file.
         if saveDestination == .photoLibrary {
             if currentAction == .audio {
                 if let videoURL = await convertAudioToVideo(fileURL) {
@@ -475,17 +518,17 @@ final class CameraManager: NSObject, AVCaptureFileOutputRecordingDelegate, CLLoc
         location: CLLocation?,
         action: RecordingAction?
     ) async {
-        guard let context = modelContext else { return }
-        let entry = RecordingEntry(
-            fileName: fileURL.lastPathComponent,
-            filePath: fileURL.path,
-            createdAt: startedAt,
-            duration: duration,
-            latitude: location?.coordinate.latitude,
-            longitude: location?.coordinate.longitude,
-            actionType: action?.rawValue ?? "unknown"
-        )
         await MainActor.run {
+            guard let context = modelContext else { return }
+            let entry = RecordingEntry(
+                fileName: fileURL.lastPathComponent,
+                filePath: fileURL.path,
+                createdAt: startedAt,
+                duration: duration,
+                latitude: location?.coordinate.latitude,
+                longitude: location?.coordinate.longitude,
+                actionType: action?.rawValue ?? "unknown"
+            )
             context.insert(entry)
             try? context.save()
         }
@@ -513,7 +556,6 @@ final class CameraManager: NSObject, AVCaptureFileOutputRecordingDelegate, CLLoc
 
     // MARK: - Audio-to-video conversion (Photos compatibility)
 
-    /// Converts an audio-only .mov to a video with a black frame so Photos can play it.
     private func convertAudioToVideo(_ audioURL: URL) async -> URL? {
         let asset = AVURLAsset(url: audioURL)
         let duration: CMTime
@@ -525,7 +567,6 @@ final class CameraManager: NSObject, AVCaptureFileOutputRecordingDelegate, CLLoc
 
         let composition = AVMutableComposition()
 
-        // Copy audio track
         if let audioTrack = try? await asset.loadTracks(withMediaType: .audio).first,
            let compAudioTrack = composition.addMutableTrack(
                withMediaType: .audio,
@@ -538,13 +579,11 @@ final class CameraManager: NSObject, AVCaptureFileOutputRecordingDelegate, CLLoc
             )
         }
 
-        // Create a black video track
         guard let videoTrack = composition.addMutableTrack(
             withMediaType: .video,
             preferredTrackID: kCMPersistentTrackID_Invalid
         ) else { return nil }
 
-        // Generate a black frame video asset matching the audio duration
         let tempDir = FileManager.default.temporaryDirectory
         let blackVideoURL = tempDir.appendingPathComponent("blackframe-\(UUID().uuidString).mp4")
 
@@ -560,7 +599,6 @@ final class CameraManager: NSObject, AVCaptureFileOutputRecordingDelegate, CLLoc
         )
         videoTrack.preferredTransform = blackTrack.preferredTransform
 
-        // Export composition
         let outputURL = tempDir.appendingPathComponent("audio-as-video-\(UUID().uuidString).mp4")
         if FileManager.default.fileExists(atPath: outputURL.path) {
             try? FileManager.default.removeItem(at: outputURL)
@@ -584,7 +622,6 @@ final class CameraManager: NSObject, AVCaptureFileOutputRecordingDelegate, CLLoc
         return nil
     }
 
-    /// Writes a black frame as an mp4 video of the given duration.
     private func writeImageAsVideo(duration: CMTime, outputURL: URL) async -> AVURLAsset? {
         if FileManager.default.fileExists(atPath: outputURL.path) {
             try? FileManager.default.removeItem(at: outputURL)
@@ -615,7 +652,6 @@ final class CameraManager: NSObject, AVCaptureFileOutputRecordingDelegate, CLLoc
         writer.startWriting()
         writer.startSession(atSourceTime: .zero)
 
-        // Write a black pixel buffer at time zero
         let semaphore = DispatchSemaphore(value: 0)
         videoInput.requestMediaDataWhenReady(on: DispatchQueue(label: "video-writer")) {
             if videoInput.isReadyForMoreMediaData {

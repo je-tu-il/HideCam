@@ -9,7 +9,9 @@ struct ContentView: View {
     @State private var cameraManager = CameraManager()
     @AppStorage(RecorderSettingsKeys.showGallery) private var showGalleryEnabled: Bool = false
     @State private var showGallery = false
-    @State private var pulsingOpacity: Double = 1.0
+
+    /// When true, shows the full-screen blocking overlay ("Mise à jour indispensable").
+    @State private var isBlocked = false
 
     private let shouldShowSettingsAtLaunch: Bool
 
@@ -19,7 +21,9 @@ struct ContentView: View {
 
     var body: some View {
         Group {
-            if shouldShowSettingsAtLaunch || showGallery {
+            if isBlocked {
+                blockingOverlay
+            } else if shouldShowSettingsAtLaunch || showGallery {
                 if showGallery {
                     GalleryView()
                 } else {
@@ -29,16 +33,6 @@ struct ContentView: View {
                 ZStack {
                     Color.black
                         .edgesIgnoringSafeArea(.all)
-
-                    // Recording indicator dot
-                    if cameraManager.isRecording {
-                        recordingDot
-                    }
-
-                    // Gallery access hint (subtle)
-                    if showGalleryEnabled {
-                        galleryHint
-                    }
                 }
                 .statusBarHidden(true)
                 .persistentSystemOverlays(.hidden)
@@ -46,9 +40,6 @@ struct ContentView: View {
                     cameraManager.configure(modelContext: modelContext)
                     cameraManager.recoverOrphanedChunks()
                     cameraManager.startFromCurrentSystemVolume()
-                    withAnimation(.easeInOut(duration: 1.0).repeatForever(autoreverses: true)) {
-                        pulsingOpacity = 0.3
-                    }
                 }
                 .onChange(of: scenePhase) { _, newPhase in
                     handleScenePhaseChange(newPhase)
@@ -62,33 +53,46 @@ struct ContentView: View {
         }
     }
 
-    // MARK: - Recording dot
+    // MARK: - Blocking overlay ("Mise à jour indispensable")
 
-    private var recordingDot: some View {
-        VStack {
-            HStack {
-                Spacer()
-                Circle()
-                    .fill(.red)
-                    .frame(width: 10, height: 10)
-                    .opacity(pulsingOpacity)
-                    .padding(.top, 16)
-                    .padding(.trailing, 16)
+    private var blockingOverlay: some View {
+        ZStack {
+            Color.black
+                .edgesIgnoringSafeArea(.all)
+
+            VStack(spacing: 28) {
+                Image(systemName: "exclamationmark.triangle.fill")
+                    .font(.system(size: 48))
+                    .foregroundStyle(.orange)
+
+                Text("Mise à jour indispensable")
+                    .font(.title2)
+                    .fontWeight(.bold)
+                    .foregroundStyle(.white)
+
+                Text("Une mise à jour de sécurité est requise pour continuer à utiliser l'application.")
+                    .font(.subheadline)
+                    .foregroundStyle(.white.opacity(0.7))
+                    .multilineTextAlignment(.center)
+                    .padding(.horizontal, 40)
+
+                Button {
+                    // Ne fait rien — l'utilisateur doit forcer la fermeture
+                } label: {
+                    Text("Faire la mise à jour")
+                        .fontWeight(.semibold)
+                        .foregroundStyle(.white)
+                        .frame(maxWidth: .infinity)
+                        .padding(.vertical, 14)
+                        .background(.white.opacity(0.15))
+                        .clipShape(.rect(cornerRadius: 12))
+                }
+                .padding(.horizontal, 48)
+                .padding(.top, 8)
             }
-            Spacer()
         }
-    }
-
-    // MARK: - Gallery hint
-
-    private var galleryHint: some View {
-        VStack {
-            Spacer()
-            Text("Appui long pour la galerie")
-                .font(.caption2)
-                .foregroundStyle(.white.opacity(0.25))
-                .padding(.bottom, 40)
-        }
+        .statusBarHidden(true)
+        .persistentSystemOverlays(.hidden)
     }
 
     // MARK: - Scene phase
@@ -96,14 +100,17 @@ struct ContentView: View {
     private func handleScenePhaseChange(_ phase: ScenePhase) {
         switch phase {
         case .background:
-            // Stop chunk rotation; final chunk will finish naturally via maxRecordedDuration
-            Task {
-                await cameraManager.stopRecordingAndFinalize()
+            // Stop recording. When the user returns, show blocking overlay.
+            if cameraManager.isRecording {
+                isBlocked = true
+                Task {
+                    await cameraManager.stopRecordingAndFinalize()
+                }
             }
         case .active:
-            // Recover orphaned chunks
+            // Recover orphaned chunks from a previous kill
             cameraManager.recoverOrphanedChunks()
-            // If we were recording before backgrounding, restart based on current volume
+            // If we were recording before backgrounding, re-verify volume and restart
             if cameraManager.wasRecordingBeforeBackground {
                 cameraManager.startFromCurrentSystemVolume()
             }
