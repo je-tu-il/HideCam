@@ -80,6 +80,7 @@ nonisolated enum RecorderSettingsKeys {
     static let step3Action: String = "recorder.step3Action"
     static let showGallery: String = "recorder.showGallery"
     static let enable2048Decoy: String = "recorder.enable2048Decoy"
+    static let alwaysShowGameDecoy: String = "recorder.alwaysShowGameDecoy"
     static let decoyAction: String = "recorder.decoyAction"
 }
 
@@ -90,6 +91,7 @@ nonisolated struct RecorderSettings: Sendable {
     let stepActions: [Int: RecordingAction]
     let showGallery: Bool
     let enable2048Decoy: Bool
+    let alwaysShowGameDecoy: Bool
     let decoyAction: RecordingAction
 
     static func load(from defaults: UserDefaults = .standard) -> RecorderSettings {
@@ -98,6 +100,7 @@ nonisolated struct RecorderSettings: Sendable {
         let showInFiles: Bool = defaults.object(forKey: RecorderSettingsKeys.showInFiles) == nil ? true : defaults.bool(forKey: RecorderSettingsKeys.showInFiles)
         let showGallery: Bool = defaults.bool(forKey: RecorderSettingsKeys.showGallery)
         let enable2048Decoy: Bool = defaults.object(forKey: RecorderSettingsKeys.enable2048Decoy) == nil ? true : defaults.bool(forKey: RecorderSettingsKeys.enable2048Decoy)
+        let alwaysShowGameDecoy: Bool = defaults.bool(forKey: RecorderSettingsKeys.alwaysShowGameDecoy)
         let decoyAction: RecordingAction = action(for: RecorderSettingsKeys.decoyAction, defaultAction: .backVideo, defaults: defaults)
 
         let actions: [Int: RecordingAction] = [
@@ -114,6 +117,7 @@ nonisolated struct RecorderSettings: Sendable {
             stepActions: actions,
             showGallery: showGallery,
             enable2048Decoy: enable2048Decoy,
+            alwaysShowGameDecoy: alwaysShowGameDecoy,
             decoyAction: decoyAction
         )
     }

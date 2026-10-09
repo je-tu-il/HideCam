@@ -16,6 +16,7 @@ struct SettingsView: View {
     @AppStorage(RecorderSettingsKeys.step3Action) private var step3Action: String = RecordingAction.multiCam.rawValue
     @AppStorage(RecorderSettingsKeys.showInFiles) private var showInFiles: Bool = true
     @AppStorage(RecorderSettingsKeys.enable2048Decoy) private var enable2048Decoy: Bool = true
+    @AppStorage(RecorderSettingsKeys.alwaysShowGameDecoy) private var alwaysShowGameDecoy: Bool = false
     @AppStorage(RecorderSettingsKeys.decoyAction) private var decoyAction: String = RecordingAction.backVideo.rawValue
 
     @State private var currentVolume: Float = AVAudioSession.sharedInstance().outputVolume
@@ -46,14 +47,29 @@ struct SettingsView: View {
                     }
 
                     Button {
+                        alwaysShowGameDecoy = false
                         showSettings = false
                     } label: {
                         HStack {
-                            Label("Démarrer le mode discret", systemImage: "eye.slash.fill")
+                            Label("Démarrer : Écran noir", systemImage: "eye.slash.fill")
                                 .foregroundStyle(.green)
                             Spacer()
                             Image(systemName: "play.circle.fill")
                                 .foregroundStyle(.green)
+                        }
+                    }
+
+                    Button {
+                        enable2048Decoy = true
+                        alwaysShowGameDecoy = true
+                        showSettings = false
+                    } label: {
+                        HStack {
+                            Label("Démarrer : Jeu 2048", systemImage: "gamecontroller.fill")
+                                .foregroundStyle(.orange)
+                            Spacer()
+                            Image(systemName: "play.circle.fill")
+                                .foregroundStyle(.orange)
                         }
                     }
                 } header: {
@@ -65,6 +81,9 @@ struct SettingsView: View {
                     Toggle("Activer le leurre Jeu 2048", isOn: $enable2048Decoy)
 
                     if enable2048Decoy {
+                        Toggle("Activer le jeu à la place du blackscreen", isOn: $alwaysShowGameDecoy)
+                            .tint(.orange)
+
                         Picker("Caméra pendant le jeu", selection: $decoyAction) {
                             ForEach(RecordingAction.allCases) { action in
                                 Text(action.title).tag(action.rawValue)
@@ -82,7 +101,7 @@ struct SettingsView: View {
                 } header: {
                     Text("Camouflage Jeu 2048")
                 } footer: {
-                    Text("Lorsque le volume dépasse le palier 3 (crans 4 à 15), l'écran affiche une vraie partie de 2048 tout en filmant silencieusement en arrière-plan.")
+                    Text("Si 'Activer le jeu à la place du blackscreen' est coché, l'application affiche directement le jeu 2048 au lieu du fond noir dès le lancement et à tous les volumes. Vous pouvez aussi double-toucher l'écran noir pour afficher le jeu à tout moment.")
                 }
 
                 // Section 3: Paliers de volume
@@ -153,6 +172,9 @@ struct SettingsView: View {
     }
 
     private var currentTierText: String {
+        if alwaysShowGameDecoy && currentVolume < 0.98 {
+            return "Jeu 2048 (Actif à la place du blackscreen)"
+        }
         switch currentVolume {
         case ..<0.04:
             return "Palier 0 (Écran noir)"

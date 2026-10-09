@@ -15,10 +15,18 @@ struct ContentView: View {
     // Volume observation
     @State private var volumeObserver: NSKeyValueObservation?
     @State private var lastObservedVolume: Float = 0.0
+    @State private var runtimeGameOverride: Bool? = nil
 
     private var isDecoyGameActive: Bool {
         let settings = RecorderSettings.load()
-        return settings.enable2048Decoy && lastObservedVolume >= 0.22 && lastObservedVolume < 0.98
+        guard settings.enable2048Decoy else { return false }
+        if let override = runtimeGameOverride {
+            return override && lastObservedVolume < 0.99
+        }
+        if settings.alwaysShowGameDecoy {
+            return lastObservedVolume < 0.99
+        }
+        return lastObservedVolume >= 0.22 && lastObservedVolume < 0.98
     }
 
     var body: some View {
@@ -28,8 +36,10 @@ struct ContentView: View {
             } else if showGallery {
                 GalleryView(showGallery: $showGallery, showSettings: $showSettings)
             } else if isDecoyGameActive {
-                Game2048View()
-                    .edgesIgnoringSafeArea(.all)
+                Game2048View(onToggleBlackScreen: {
+                    runtimeGameOverride = false
+                })
+                .edgesIgnoringSafeArea(.all)
             } else {
                 stealthView
             }
@@ -93,6 +103,11 @@ struct ContentView: View {
             .onDisappear {
                 UIApplication.shared.isIdleTimerDisabled = false
             }
+            .onTapGesture(count: 2) {
+                if RecorderSettings.load().enable2048Decoy {
+                    runtimeGameOverride = true
+                }
+            }
     }
 
     // MARK: - Volume Observer (Seul moyen de contrôle en mode furtif)
@@ -109,6 +124,7 @@ struct ContentView: View {
                     if cameraManager.isRecording {
                         await cameraManager.stopRecordingAndFinalize()
                     }
+                    runtimeGameOverride = nil
                     showSettings = true
                     return
                 }

@@ -1,6 +1,8 @@
 import SwiftUI
 
 struct Game2048View: View {
+    var onToggleBlackScreen: (() -> Void)? = nil
+
     @AppStorage("game2048_high_score") private var highScore: Int = 0
 
     @State private var board: [[Int]] = Array(repeating: Array(repeating: 0, count: 4), count: 4)
@@ -24,6 +26,9 @@ struct Game2048View: View {
                         Text("Rejoignez les tuiles !")
                             .font(.system(size: 13, weight: .medium))
                             .foregroundStyle(Color(red: 0.55, green: 0.50, blue: 0.47))
+                    }
+                    .onTapGesture(count: 2) {
+                        onToggleBlackScreen?()
                     }
 
                     Spacer()
