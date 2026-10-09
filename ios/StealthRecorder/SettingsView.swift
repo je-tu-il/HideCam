@@ -61,7 +61,7 @@ struct SettingsView: View {
                 }
 
                 // Section 2: Camouflage Jeu 2048
-                Section("Camouflage Jeu 2048") {
+                Section {
                     Toggle("Activer le leurre Jeu 2048", isOn: $enable2048Decoy)
 
                     if enable2048Decoy {
@@ -79,6 +79,8 @@ struct SettingsView: View {
                             Label("Tester le jeu 2048", systemImage: "gamecontroller.fill")
                         }
                     }
+                } header: {
+                    Text("Camouflage Jeu 2048")
                 } footer: {
                     Text("Lorsque le volume dépasse le palier 3 (crans 4 à 15), l'écran affiche une vraie partie de 2048 tout en filmant silencieusement en arrière-plan.")
                 }
@@ -104,7 +106,7 @@ struct SettingsView: View {
                 }
 
                 // Section 4: Destination & Qualité
-                Section("Qualité et stockage") {
+                Section {
                     Picker("Qualité vidéo", selection: $videoQuality) {
                         ForEach(VideoQuality.allCases) { quality in
                             Text(quality.title).tag(quality.rawValue)
@@ -118,16 +120,20 @@ struct SettingsView: View {
                     }
 
                     Toggle("Visible dans l'app Fichiers", isOn: $showInFiles)
+                } header: {
+                    Text("Qualité et stockage")
                 }
 
                 // Section 5: Fonctionnement discret
-                Section("Fonctionnement discret") {
+                Section {
                     Label("Écran noir inerte : aucune réaction tactile sur paliers 0 à 3", systemImage: "hand.raised.slash.fill")
                     Label("Jeu 2048 jouable : s'affiche dès le 4ème cran de volume", systemImage: "gamecontroller.fill")
                     Label("Changement de volume : bascule instantanément l'action", systemImage: "speaker.wave.2.fill")
                     Label("Mise en veille : sauvegarde automatique immédiate", systemImage: "moon.fill")
                     Label("Retour sur l'app : relance automatique de l'enregistrement", systemImage: "arrow.clockwise.circle.fill")
                     Label("Son à fond (100%) : accès unique à cette configuration", systemImage: "speaker.wave.3.fill")
+                } header: {
+                    Text("Fonctionnement discret")
                 }
             }
             .navigationTitle("Configuration")
