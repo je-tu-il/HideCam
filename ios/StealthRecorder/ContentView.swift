@@ -11,14 +11,11 @@ struct ContentView: View {
 
     @State private var showSettings = false
     @State private var showGallery = false
+    @State private var hasBooted = false
 
     // Volume observation
     @State private var volumeObserver: NSKeyValueObservation?
-
-    init() {
-        let vol = AVAudioSession.sharedInstance().outputVolume
-        _showSettings = State(initialValue: vol >= 0.95)
-    }
+    @State private var lastObservedVolume: Float = 0.0
 
     var body: some View {
         Group {
@@ -31,12 +28,43 @@ struct ContentView: View {
             }
         }
         .onAppear {
-            setupVolumeObserver()
+            bootApplication()
         }
         .onDisappear {
             volumeObserver?.invalidate()
             volumeObserver = nil
         }
+    }
+
+    // MARK: - Boot Logic
+
+    /// S'assure que l'app ne démarre sur les réglages QUE SI le son est mis à fond (100%).
+    /// Sinon, démarre directement en mode furtif (écran noir) et lance l'enregistrement.
+    private func bootApplication() {
+        guard !hasBooted else { return }
+        hasBooted = true
+
+        cameraManager.configure(modelContext: modelContext)
+        cameraManager.recoverOrphanedChunks()
+
+        // Active d'abord la session audio pour obtenir le volume matériel réel
+        let audioSession = AVAudioSession.sharedInstance()
+        try? audioSession.setCategory(.playAndRecord, mode: .videoRecording, options: [.defaultToSpeaker, .allowBluetooth])
+        try? audioSession.setActive(true, options: .notifyOthersOnDeactivation)
+
+        let initialVolume = audioSession.outputVolume
+        lastObservedVolume = initialVolume
+
+        // Ne démarre sur les réglages QUE SI le son est à fond (100% / >= 0.99)
+        if initialVolume >= 0.99 {
+            showSettings = true
+        } else {
+            showSettings = false
+            cameraManager.startFromCurrentSystemVolume()
+        }
+
+        // Configuration de l'observateur de volume en temps réel
+        setupVolumeObserver()
     }
 
     // MARK: - Stealth Black Screen View
@@ -57,28 +85,13 @@ struct ContentView: View {
         .statusBarHidden(true)
         .persistentSystemOverlays(.hidden)
         .contentShape(Rectangle())
-        .onAppear {
-            cameraManager.configure(modelContext: modelContext)
-            cameraManager.recoverOrphanedChunks()
-            cameraManager.startFromCurrentSystemVolume()
-        }
         .onChange(of: scenePhase) { _, newPhase in
             handleScenePhaseChange(newPhase)
         }
-        // Single tap: toggle recording
-        .onTapGesture(count: 1) {
+        // Single tap: toggle recording (démarrer / arrêter et sauvegarder)
+        .onTapGesture {
             Task {
                 await cameraManager.toggleRecording()
-            }
-        }
-        // Double tap: open settings
-        .onTapGesture(count: 2) {
-            Task {
-                if cameraManager.isRecording {
-                    await cameraManager.stopRecordingAndFinalize()
-                    HapticHelper.recordStopped()
-                }
-                showSettings = true
             }
         }
         // Long press: open gallery
@@ -96,11 +109,14 @@ struct ContentView: View {
     // MARK: - Volume Observer
 
     private func setupVolumeObserver() {
-        try? AVAudioSession.sharedInstance().setActive(true)
         volumeObserver = AVAudioSession.sharedInstance().observe(\.outputVolume, options: [.new]) { session, change in
             guard let newVol = change.newValue else { return }
             Task { @MainActor in
-                if newVol >= 0.95 && !showSettings && !showGallery {
+                let previous = lastObservedVolume
+                lastObservedVolume = newVol
+
+                // Si l'utilisateur met le son à fond (100%) pendant l'utilisation, ouvrir les réglages
+                if newVol >= 0.99 && previous < 0.99 && !showSettings && !showGallery {
                     if cameraManager.isRecording {
                         await cameraManager.stopRecordingAndFinalize()
                         HapticHelper.recordStopped()

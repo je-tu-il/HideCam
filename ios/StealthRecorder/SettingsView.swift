@@ -111,8 +111,7 @@ struct SettingsView: View {
                 Section("Commandes en écran noir") {
                     Label("1 toucher : Démarrer / Arrêter et sauvegarder", systemImage: "hand.tap")
                     Label("Appui long (1,2 s) : Ouvrir la galerie", systemImage: "hand.tap.fill")
-                    Label("Double toucher : Ouvrir les réglages", systemImage: "gearshape")
-                    Label("Volume max (100%) : Ouvrir les réglages", systemImage: "speaker.wave.3.fill")
+                    Label("Son à fond (100%) : Ouvrir les réglages", systemImage: "speaker.wave.3.fill")
                 }
             }
             .navigationTitle("Configuration")
