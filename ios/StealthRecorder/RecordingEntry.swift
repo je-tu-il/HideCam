@@ -33,8 +33,44 @@ final class RecordingEntry {
 
     var hasLocation: Bool { latitude != nil && longitude != nil }
 
+    /// Resolves the actual file URL on disk, handling app container UUID migrations safely.
+    var resolvedURL: URL {
+        let directURL = URL(fileURLWithPath: filePath)
+        if FileManager.default.fileExists(atPath: directURL.path) {
+            return directURL
+        }
+        let docs = FileManager.default.urls(for: .documentDirectory, in: .userDomainMask).first!
+            .appendingPathComponent("Recordings", isDirectory: true)
+            .appendingPathComponent(fileName)
+        if FileManager.default.fileExists(atPath: docs.path) {
+            return docs
+        }
+        let appSupport = FileManager.default.urls(for: .applicationSupportDirectory, in: .userDomainMask).first!
+            .appendingPathComponent("Recordings", isDirectory: true)
+            .appendingPathComponent(fileName)
+        if FileManager.default.fileExists(atPath: appSupport.path) {
+            return appSupport
+        }
+        return directURL
+    }
+
+    var fileExists: Bool {
+        FileManager.default.fileExists(atPath: resolvedURL.path)
+    }
+
+    var fileSizeDescription: String {
+        let url = resolvedURL
+        guard let size = try? FileManager.default.attributesOfItem(atPath: url.path)[.size] as? Int64, size > 0 else {
+            return ""
+        }
+        let formatter = ByteCountFormatter()
+        formatter.allowedUnits = [.useMB, .useKB, .useBytes]
+        formatter.countStyle = .file
+        return formatter.string(fromByteCount: size)
+    }
+
     var formattedDuration: String {
-        let totalSeconds = Int(duration)
+        let totalSeconds = max(0, Int(duration))
         let hours = totalSeconds / 3600
         let minutes = (totalSeconds % 3600) / 60
         let seconds = totalSeconds % 60

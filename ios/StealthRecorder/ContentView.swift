@@ -7,113 +7,134 @@ struct ContentView: View {
     @Environment(\.scenePhase) private var scenePhase
 
     @State private var cameraManager = CameraManager()
-    @AppStorage(RecorderSettingsKeys.showGallery) private var showGalleryEnabled: Bool = false
+    @AppStorage(RecorderSettingsKeys.stealthIndicator) private var stealthIndicator: Bool = false
+
+    @State private var showSettings = false
     @State private var showGallery = false
 
-    /// When true, shows the full-screen blocking overlay ("Mise à jour indispensable").
-    @State private var isBlocked = false
-
-    private let shouldShowSettingsAtLaunch: Bool
+    // Volume observation
+    @State private var volumeObserver: NSKeyValueObservation?
 
     init() {
-        shouldShowSettingsAtLaunch = AVAudioSession.sharedInstance().outputVolume == 1.0
+        let vol = AVAudioSession.sharedInstance().outputVolume
+        _showSettings = State(initialValue: vol >= 0.95)
     }
 
     var body: some View {
         Group {
-            if isBlocked {
-                blockingOverlay
-            } else if shouldShowSettingsAtLaunch || showGallery {
-                if showGallery {
-                    GalleryView()
-                } else {
-                    SettingsView()
-                }
+            if showSettings {
+                SettingsView(showSettings: $showSettings, showGallery: $showGallery)
+            } else if showGallery {
+                GalleryView()
             } else {
-                ZStack {
-                    Color.black
-                        .edgesIgnoringSafeArea(.all)
-                }
-                .statusBarHidden(true)
-                .persistentSystemOverlays(.hidden)
-                .onAppear {
-                    cameraManager.configure(modelContext: modelContext)
-                    cameraManager.recoverOrphanedChunks()
-                    cameraManager.startFromCurrentSystemVolume()
-                }
-                .onChange(of: scenePhase) { _, newPhase in
-                    handleScenePhaseChange(newPhase)
-                }
-                .onLongPressGesture(minimumDuration: 2.0) {
-                    if showGalleryEnabled {
-                        showGallery = true
-                    }
-                }
+                stealthView
             }
+        }
+        .onAppear {
+            setupVolumeObserver()
+        }
+        .onDisappear {
+            volumeObserver?.invalidate()
+            volumeObserver = nil
         }
     }
 
-    // MARK: - Blocking overlay ("Mise à jour indispensable")
+    // MARK: - Stealth Black Screen View
 
-    private var blockingOverlay: some View {
-        ZStack {
+    private var stealthView: some View {
+        ZStack(alignment: .topTrailing) {
             Color.black
                 .edgesIgnoringSafeArea(.all)
 
-            VStack(spacing: 28) {
-                Image(systemName: "exclamationmark.triangle.fill")
-                    .font(.system(size: 48))
-                    .foregroundStyle(.orange)
-
-                Text("Mise à jour indispensable")
-                    .font(.title2)
-                    .fontWeight(.bold)
-                    .foregroundStyle(.white)
-
-                Text("Une mise à jour de sécurité est requise pour continuer à utiliser l'application.")
-                    .font(.subheadline)
-                    .foregroundStyle(.white.opacity(0.7))
-                    .multilineTextAlignment(.center)
-                    .padding(.horizontal, 40)
-
-                Button {
-                    // Ne fait rien — l'utilisateur doit forcer la fermeture
-                } label: {
-                    Text("Faire la mise à jour")
-                        .fontWeight(.semibold)
-                        .foregroundStyle(.white)
-                        .frame(maxWidth: .infinity)
-                        .padding(.vertical, 14)
-                        .background(.white.opacity(0.15))
-                        .clipShape(.rect(cornerRadius: 12))
-                }
-                .padding(.horizontal, 48)
-                .padding(.top, 8)
+            // Optional discreet status indicator in corner
+            if stealthIndicator {
+                Circle()
+                    .fill(cameraManager.isRecording ? Color.red.opacity(0.4) : Color.white.opacity(0.08))
+                    .frame(width: 4, height: 4)
+                    .padding(12)
             }
         }
         .statusBarHidden(true)
         .persistentSystemOverlays(.hidden)
+        .contentShape(Rectangle())
+        .onAppear {
+            cameraManager.configure(modelContext: modelContext)
+            cameraManager.recoverOrphanedChunks()
+            cameraManager.startFromCurrentSystemVolume()
+        }
+        .onChange(of: scenePhase) { _, newPhase in
+            handleScenePhaseChange(newPhase)
+        }
+        // Single tap: toggle recording
+        .onTapGesture(count: 1) {
+            Task {
+                await cameraManager.toggleRecording()
+            }
+        }
+        // Double tap: open settings
+        .onTapGesture(count: 2) {
+            Task {
+                if cameraManager.isRecording {
+                    await cameraManager.stopRecordingAndFinalize()
+                    HapticHelper.recordStopped()
+                }
+                showSettings = true
+            }
+        }
+        // Long press: open gallery
+        .onLongPressGesture(minimumDuration: 1.2) {
+            Task {
+                if cameraManager.isRecording {
+                    await cameraManager.stopRecordingAndFinalize()
+                    HapticHelper.recordStopped()
+                }
+                showGallery = true
+            }
+        }
     }
 
-    // MARK: - Scene phase
+    // MARK: - Volume Observer
+
+    private func setupVolumeObserver() {
+        try? AVAudioSession.sharedInstance().setActive(true)
+        volumeObserver = AVAudioSession.sharedInstance().observe(\.outputVolume, options: [.new]) { session, change in
+            guard let newVol = change.newValue else { return }
+            Task { @MainActor in
+                if newVol >= 0.95 && !showSettings && !showGallery {
+                    if cameraManager.isRecording {
+                        await cameraManager.stopRecordingAndFinalize()
+                        HapticHelper.recordStopped()
+                    }
+                    showSettings = true
+                }
+            }
+        }
+    }
+
+    // MARK: - Scene Phase
 
     private func handleScenePhaseChange(_ phase: ScenePhase) {
         switch phase {
         case .background:
-            // Stop recording. When the user returns, show blocking overlay.
             if cameraManager.isRecording {
-                isBlocked = true
+                var bgTask: UIBackgroundTaskIdentifier = .invalid
+                bgTask = UIApplication.shared.beginBackgroundTask(withName: "StealthRecorder.SaveBackground") {
+                    if bgTask != .invalid {
+                        UIApplication.shared.endBackgroundTask(bgTask)
+                        bgTask = .invalid
+                    }
+                }
+
                 Task {
                     await cameraManager.stopRecordingAndFinalize()
+                    if bgTask != .invalid {
+                        UIApplication.shared.endBackgroundTask(bgTask)
+                        bgTask = .invalid
+                    }
                 }
             }
         case .active:
-            // Recover orphaned chunks from a previous kill
             cameraManager.recoverOrphanedChunks()
-            // If we were recording before backgrounding, re-verify volume and restart
-            if cameraManager.wasRecordingBeforeBackground {
-                cameraManager.startFromCurrentSystemVolume()
-            }
         default:
             break
         }

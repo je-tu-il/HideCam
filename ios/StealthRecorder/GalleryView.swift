@@ -16,6 +16,67 @@ private struct ActivityViewController: UIViewControllerRepresentable {
     func updateUIViewController(_ uiViewController: UIActivityViewController, context: Context) {}
 }
 
+// MARK: - Thumbnail Generator & View
+
+private struct VideoThumbnailView: View {
+    let url: URL
+    let actionType: String
+
+    @State private var thumbnail: UIImage?
+
+    var body: some View {
+        ZStack {
+            if let thumbnail {
+                Image(uiImage: thumbnail)
+                    .resizable()
+                    .scaledToFill()
+                    .frame(width: 52, height: 52)
+                    .clipped()
+                    .clipShape(RoundedRectangle(cornerRadius: 10))
+            } else {
+                RoundedRectangle(cornerRadius: 10)
+                    .fill(Color(.systemGray5))
+                    .frame(width: 52, height: 52)
+
+                Image(systemName: iconName)
+                    .font(.title3)
+                    .foregroundStyle(.secondary)
+            }
+        }
+        .task {
+            if actionType != "audio" {
+                loadThumbnail()
+            }
+        }
+    }
+
+    private var iconName: String {
+        switch actionType {
+        case "audio": return "mic.fill"
+        case "frontVideo", "backVideo": return "camera.fill"
+        case "multiCam": return "camera.on.rectangle.fill"
+        default: return "recordingtape"
+        }
+    }
+
+    private func loadThumbnail() {
+        guard FileManager.default.fileExists(atPath: url.path) else { return }
+        Task.detached(priority: .userInitiated) {
+            let asset = AVURLAsset(url: url)
+            let generator = AVAssetImageGenerator(asset: asset)
+            generator.appliesPreferredTrackTransform = true
+            generator.maximumSize = CGSize(width: 140, height: 140)
+            let time = CMTime(seconds: 0.5, preferredTimescale: 600)
+            if let cgImage = try? generator.copyCGImage(at: time, actualTime: nil) {
+                let uiImage = UIImage(cgImage: cgImage)
+                await MainActor.run {
+                    self.thumbnail = uiImage
+                }
+            }
+        }
+    }
+}
+
 // MARK: - GalleryView
 
 struct GalleryView: View {
@@ -26,6 +87,9 @@ struct GalleryView: View {
     @State private var selectedRecording: RecordingEntry?
     @State private var player: AVPlayer?
     @State private var showPlayer = false
+    @State private var isPlayingAudio = false
+    @State private var isAudioPlaying = false
+
     @State private var showDeleteConfirm = false
     @State private var recordingToDelete: RecordingEntry?
     @State private var showShareSheet = false
@@ -45,10 +109,15 @@ struct GalleryView: View {
             .toolbar {
                 ToolbarItem(placement: .navigationBarTrailing) {
                     Button("Fermer") { dismiss() }
+                        .fontWeight(.semibold)
                 }
             }
             .fullScreenCover(isPresented: $showPlayer) {
-                videoPlayerView
+                if isPlayingAudio {
+                    audioPlayerSheet
+                } else {
+                    videoPlayerSheet
+                }
             }
             .sheet(isPresented: $showShareSheet) {
                 if let url = shareURL {
@@ -62,10 +131,11 @@ struct GalleryView: View {
                     if let entry = recordingToDelete { deleteRecording(entry) }
                 }
             } message: {
-                Text("Cette action est irréversible. Le fichier sera supprimé définitivement.")
+                Text("Cette action est irréversible. Le fichier sera supprimé définitivement du stockage.")
             }
             .onAppear {
-                try? AVAudioSession.sharedInstance().setActive(false)
+                try? AVAudioSession.sharedInstance().setCategory(.playback, mode: .default)
+                try? AVAudioSession.sharedInstance().setActive(true)
             }
             .onDisappear {
                 player?.pause()
@@ -85,7 +155,7 @@ struct GalleryView: View {
                 .font(.title3)
                 .fontWeight(.semibold)
                 .foregroundStyle(.secondary)
-            Text("Les enregistrements apparaîtront ici avec leur date, heure et position.")
+            Text("Vos enregistrements discrets apparaîtront ici avec date, durée, taille et localisation.")
                 .font(.subheadline)
                 .foregroundStyle(.tertiary)
                 .multilineTextAlignment(.center)
@@ -117,9 +187,21 @@ struct GalleryView: View {
                     }
                     .contextMenu {
                         Button {
+                            playRecording(entry)
+                        } label: {
+                            Label("Lire", systemImage: "play.fill")
+                        }
+                        Button {
                             shareFile(entry)
                         } label: {
                             Label("Partager / Ouvrir avec", systemImage: "square.and.arrow.up")
+                        }
+                        if entry.hasLocation {
+                            Button {
+                                openInMaps(entry)
+                            } label: {
+                                Label("Voir sur Plans", systemImage: "map.fill")
+                            }
                         }
                         Button(role: .destructive) {
                             recordingToDelete = entry
@@ -137,15 +219,7 @@ struct GalleryView: View {
 
     private func recordingRow(_ entry: RecordingEntry) -> some View {
         HStack(spacing: 14) {
-            ZStack {
-                RoundedRectangle(cornerRadius: 10)
-                    .fill(Color(.systemGray5))
-                    .frame(width: 52, height: 52)
-
-                Image(systemName: iconName(for: entry.actionType))
-                    .font(.title3)
-                    .foregroundStyle(.secondary)
-            }
+            VideoThumbnailView(url: entry.resolvedURL, actionType: entry.actionType)
 
             VStack(alignment: .leading, spacing: 4) {
                 HStack(spacing: 6) {
@@ -166,18 +240,31 @@ struct GalleryView: View {
                     Text("·")
                         .foregroundStyle(.tertiary)
 
-                    Label(entry.actionDisplayName, systemImage: "camera.fill")
+                    Label(entry.actionDisplayName, systemImage: iconName(for: entry.actionType))
                         .font(.caption)
                         .foregroundStyle(.secondary)
+
+                    if !entry.fileSizeDescription.isEmpty {
+                        Text("·")
+                            .foregroundStyle(.tertiary)
+                        Text(entry.fileSizeDescription)
+                            .font(.caption)
+                            .foregroundStyle(.secondary)
+                    }
                 }
 
                 if entry.hasLocation {
-                    Label(
-                        String(format: "%.4f, %.4f", entry.latitude!, entry.longitude!),
-                        systemImage: "location.fill"
-                    )
-                    .font(.caption2)
-                    .foregroundStyle(.tertiary)
+                    Button {
+                        openInMaps(entry)
+                    } label: {
+                        Label(
+                            String(format: "%.4f, %.4f", entry.latitude!, entry.longitude!),
+                            systemImage: "location.fill"
+                        )
+                        .font(.caption2)
+                        .foregroundStyle(.blue)
+                    }
+                    .buttonStyle(.plain)
                 }
             }
 
@@ -188,19 +275,20 @@ struct GalleryView: View {
             } label: {
                 Image(systemName: "play.circle.fill")
                     .font(.title2)
-                    .foregroundStyle(.white.opacity(0.8))
+                    .foregroundStyle(.blue)
             }
+            .buttonStyle(.plain)
         }
-        .padding(.vertical, 6)
+        .padding(.vertical, 4)
         .contentShape(Rectangle())
         .onTapGesture {
             playRecording(entry)
         }
     }
 
-    // MARK: - Video / Audio player (unified via AVPlayer)
+    // MARK: - Video player sheet
 
-    private var videoPlayerView: some View {
+    private var videoPlayerSheet: some View {
         Group {
             if let player {
                 VideoPlayer(player: player)
@@ -222,33 +310,114 @@ struct GalleryView: View {
         }
     }
 
+    // MARK: - Audio player sheet
+
+    private var audioPlayerSheet: some View {
+        ZStack {
+            Color(.systemBackground)
+                .edgesIgnoringSafeArea(.all)
+
+            VStack(spacing: 28) {
+                HStack {
+                    Spacer()
+                    Button {
+                        player?.pause()
+                        player = nil
+                        showPlayer = false
+                    } label: {
+                        Image(systemName: "xmark.circle.fill")
+                            .font(.title)
+                            .foregroundStyle(.secondary)
+                    }
+                }
+                .padding(.horizontal, 24)
+                .padding(.top, 16)
+
+                Spacer()
+
+                ZStack {
+                    Circle()
+                        .fill(Color.blue.opacity(0.12))
+                        .frame(width: 120, height: 120)
+
+                    Image(systemName: "waveform")
+                        .font(.system(size: 54))
+                        .foregroundStyle(.blue)
+                }
+
+                VStack(spacing: 6) {
+                    Text(selectedRecording?.actionDisplayName ?? "Enregistrement Audio")
+                        .font(.title2)
+                        .fontWeight(.bold)
+
+                    Text("\(selectedRecording?.formattedDate ?? "") à \(selectedRecording?.formattedTime ?? "")")
+                        .font(.subheadline)
+                        .foregroundStyle(.secondary)
+
+                    if let entry = selectedRecording, !entry.fileSizeDescription.isEmpty {
+                        Text("\(entry.formattedDuration) · \(entry.fileSizeDescription)")
+                            .font(.caption)
+                            .foregroundStyle(.tertiary)
+                    }
+                }
+
+                Spacer()
+
+                Button {
+                    guard let p = player else { return }
+                    if isAudioPlaying {
+                        p.pause()
+                        isAudioPlaying = false
+                    } else {
+                        p.play()
+                        isAudioPlaying = true
+                    }
+                } label: {
+                    Image(systemName: isAudioPlaying ? "pause.circle.fill" : "play.circle.fill")
+                        .font(.system(size: 72))
+                        .foregroundStyle(.blue)
+                }
+
+                Spacer()
+            }
+        }
+    }
+
     // MARK: - Actions
 
     private func playRecording(_ entry: RecordingEntry) {
-        let url = URL(fileURLWithPath: entry.filePath)
+        let url = entry.resolvedURL
         guard FileManager.default.fileExists(atPath: url.path) else { return }
 
         selectedRecording = entry
+        isPlayingAudio = (entry.actionType == "audio")
 
-        // Use AVPlayer for everything — handles audio-only .mov files
         let player = AVPlayer(url: url)
         self.player = player
+        self.isAudioPlaying = true
         showPlayer = true
         player.play()
     }
 
     private func shareFile(_ entry: RecordingEntry) {
-        let url = URL(fileURLWithPath: entry.filePath)
+        let url = entry.resolvedURL
         guard FileManager.default.fileExists(atPath: url.path) else { return }
         shareURL = url
         showShareSheet = true
     }
 
     private func deleteRecording(_ entry: RecordingEntry) {
-        let url = URL(fileURLWithPath: entry.filePath)
+        let url = entry.resolvedURL
         try? FileManager.default.removeItem(at: url)
         modelContext.delete(entry)
         try? modelContext.save()
+    }
+
+    private func openInMaps(_ entry: RecordingEntry) {
+        guard let lat = entry.latitude, let lon = entry.longitude else { return }
+        if let url = URL(string: "http://maps.apple.com/?ll=\(lat),\(lon)&q=Enregistrement") {
+            UIApplication.shared.open(url)
+        }
     }
 
     private func iconName(for actionType: String) -> String {
