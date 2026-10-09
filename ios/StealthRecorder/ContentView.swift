@@ -7,7 +7,6 @@ struct ContentView: View {
     @Environment(\.scenePhase) private var scenePhase
 
     @State private var cameraManager = CameraManager()
-    @AppStorage(RecorderSettingsKeys.stealthIndicator) private var stealthIndicator: Bool = false
 
     @State private var showSettings = false
     @State private var showGallery = false
@@ -38,8 +37,8 @@ struct ContentView: View {
 
     // MARK: - Boot Logic
 
-    /// S'assure que l'app ne démarre sur les réglages QUE SI le son est mis à fond (100%).
-    /// Sinon, démarre directement en mode furtif (écran noir) et lance l'enregistrement.
+    /// Détermine si l'application doit démarrer sur le menu de configuration (son à fond uniquement)
+    /// ou directement en écran noir inerte et lancer l'enregistrement.
     private func bootApplication() {
         guard !hasBooted else { return }
         hasBooted = true
@@ -47,7 +46,7 @@ struct ContentView: View {
         cameraManager.configure(modelContext: modelContext)
         cameraManager.recoverOrphanedChunks()
 
-        // Active d'abord la session audio pour obtenir le volume matériel réel
+        // Active d'abord la session audio pour lire le volume matériel réel
         let audioSession = AVAudioSession.sharedInstance()
         try? audioSession.setCategory(.playAndRecord, mode: .videoRecording, options: [.defaultToSpeaker, .allowBluetooth])
         try? audioSession.setActive(true, options: .notifyOthersOnDeactivation)
@@ -63,50 +62,28 @@ struct ContentView: View {
             cameraManager.startFromCurrentSystemVolume()
         }
 
-        // Configuration de l'observateur de volume en temps réel
         setupVolumeObserver()
     }
 
-    // MARK: - Stealth Black Screen View
+    // MARK: - Stealth Black Screen View (Aucune interaction tactile)
 
     private var stealthView: some View {
-        ZStack(alignment: .topTrailing) {
-            Color.black
-                .edgesIgnoringSafeArea(.all)
-
-            // Optional discreet status indicator in corner
-            if stealthIndicator {
-                Circle()
-                    .fill(cameraManager.isRecording ? Color.red.opacity(0.4) : Color.white.opacity(0.08))
-                    .frame(width: 4, height: 4)
-                    .padding(12)
+        Color.black
+            .edgesIgnoringSafeArea(.all)
+            .statusBarHidden(true)
+            .persistentSystemOverlays(.hidden)
+            .onAppear {
+                UIApplication.shared.isIdleTimerDisabled = true
             }
-        }
-        .statusBarHidden(true)
-        .persistentSystemOverlays(.hidden)
-        .contentShape(Rectangle())
-        .onChange(of: scenePhase) { _, newPhase in
-            handleScenePhaseChange(newPhase)
-        }
-        // Single tap: toggle recording (démarrer / arrêter et sauvegarder)
-        .onTapGesture {
-            Task {
-                await cameraManager.toggleRecording()
+            .onDisappear {
+                UIApplication.shared.isIdleTimerDisabled = false
             }
-        }
-        // Long press: open gallery
-        .onLongPressGesture(minimumDuration: 1.2) {
-            Task {
-                if cameraManager.isRecording {
-                    await cameraManager.stopRecordingAndFinalize()
-                    HapticHelper.recordStopped()
-                }
-                showGallery = true
+            .onChange(of: scenePhase) { _, newPhase in
+                handleScenePhaseChange(newPhase)
             }
-        }
     }
 
-    // MARK: - Volume Observer
+    // MARK: - Volume Observer (Seul moyen de contrôle en mode furtif)
 
     private func setupVolumeObserver() {
         volumeObserver = AVAudioSession.sharedInstance().observe(\.outputVolume, options: [.new]) { session, change in
@@ -115,26 +92,45 @@ struct ContentView: View {
                 let previous = lastObservedVolume
                 lastObservedVolume = newVol
 
-                // Si l'utilisateur met le son à fond (100%) pendant l'utilisation, ouvrir les réglages
+                // 1. Son mis à fond (100% / >= 0.99) : ouvrir les réglages
                 if newVol >= 0.99 && previous < 0.99 && !showSettings && !showGallery {
                     if cameraManager.isRecording {
                         await cameraManager.stopRecordingAndFinalize()
-                        HapticHelper.recordStopped()
                     }
                     showSettings = true
+                    return
+                }
+
+                // 2. Changement de volume sous les 100% : déclenche ou bascule l'enregistrement selon le palier
+                if !showSettings && !showGallery && newVol < 0.99 {
+                    let settings = RecorderSettings.load()
+                    let targetAction = cameraManager.recordingAction(for: newVol, settings: settings)
+
+                    if cameraManager.isRecording {
+                        if cameraManager.currentAction != targetAction {
+                            // Bascule de palier : finalise l'ancien et lance le nouveau
+                            await cameraManager.stopRecordingAndFinalize()
+                            cameraManager.startFromCurrentSystemVolume()
+                        }
+                    } else {
+                        // Démarre l'enregistrement
+                        cameraManager.startFromCurrentSystemVolume()
+                    }
                 }
             }
         }
     }
 
-    // MARK: - Scene Phase
+    // MARK: - Scene Phase (Mise en veille / Arrière-plan)
 
     private func handleScenePhaseChange(_ phase: ScenePhase) {
         switch phase {
         case .background:
+            // Dès que le téléphone est mis en veille (bouton power / verrouillage),
+            // on finalise et sauvegarde immédiatement l'enregistrement en cours via tâche d'arrière-plan
             if cameraManager.isRecording {
                 var bgTask: UIBackgroundTaskIdentifier = .invalid
-                bgTask = UIApplication.shared.beginBackgroundTask(withName: "StealthRecorder.SaveBackground") {
+                bgTask = UIApplication.shared.beginBackgroundTask(withName: "StealthRecorder.SaveOnSleep") {
                     if bgTask != .invalid {
                         UIApplication.shared.endBackgroundTask(bgTask)
                         bgTask = .invalid

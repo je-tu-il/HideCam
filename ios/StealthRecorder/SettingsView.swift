@@ -15,8 +15,6 @@ struct SettingsView: View {
     @AppStorage(RecorderSettingsKeys.step2Action) private var step2Action: String = RecordingAction.backVideo.rawValue
     @AppStorage(RecorderSettingsKeys.step3Action) private var step3Action: String = RecordingAction.multiCam.rawValue
     @AppStorage(RecorderSettingsKeys.showInFiles) private var showInFiles: Bool = true
-    @AppStorage(RecorderSettingsKeys.hapticFeedback) private var hapticFeedback: Bool = true
-    @AppStorage(RecorderSettingsKeys.stealthIndicator) private var stealthIndicator: Bool = false
 
     @State private var currentVolume: Float = AVAudioSession.sharedInstance().outputVolume
 
@@ -97,21 +95,12 @@ struct SettingsView: View {
                     Toggle("Visible dans l'app Fichiers", isOn: $showInFiles)
                 }
 
-                // Section 4: Discrétion & Ergonomie
-                Section {
-                    Toggle("Vibrations haptiques discrètes", isOn: $hapticFeedback)
-                    Toggle("Micro-indicateur d'état (point discret)", isOn: $stealthIndicator)
-                } header: {
-                    Text("Discrétion et retour")
-                } footer: {
-                    Text("Une vibration discrète confirme le démarrage (1 coup) et l'enregistrement réussi (2 coups).")
-                }
-
-                // Section 5: Gestes en mode discret
-                Section("Commandes en écran noir") {
-                    Label("1 toucher : Démarrer / Arrêter et sauvegarder", systemImage: "hand.tap")
-                    Label("Appui long (1,2 s) : Ouvrir la galerie", systemImage: "hand.tap.fill")
-                    Label("Son à fond (100%) : Ouvrir les réglages", systemImage: "speaker.wave.3.fill")
+                // Section 4: Fonctionnement discret
+                Section("Fonctionnement discret") {
+                    Label("Écran noir inerte : aucune réaction au toucher", systemImage: "hand.raised.slash.fill")
+                    Label("Changer le volume : démarre l'enregistrement selon le palier", systemImage: "speaker.wave.2.fill")
+                    Label("Mise en veille : sauvegarde automatique immédiate", systemImage: "moon.fill")
+                    Label("Son à fond (100%) : accès unique aux réglages", systemImage: "speaker.wave.3.fill")
                 }
             }
             .navigationTitle("Configuration")

@@ -41,7 +41,6 @@ struct StealthRecorderTests {
         #expect(settings.videoQuality == .high)
         #expect(settings.saveDestination == .documents)
         #expect(settings.showInFiles == true)
-        #expect(settings.hapticFeedback == true)
         #expect(settings.stepActions[0] == .audio)
         #expect(settings.stepActions[1] == .frontVideo)
         #expect(settings.stepActions[2] == .backVideo)
