@@ -98,9 +98,11 @@ struct SettingsView: View {
                 }
 
                 // Section 4: Discrétion & Ergonomie
-                Section("Discrétion et retour") {
-                    Toggle("Vibrations haptic discrètes", isOn: $hapticFeedback)
+                Section {
+                    Toggle("Vibrations haptiques discrètes", isOn: $hapticFeedback)
                     Toggle("Micro-indicateur d'état (point discret)", isOn: $stealthIndicator)
+                } header: {
+                    Text("Discrétion et retour")
                 } footer: {
                     Text("Une vibration discrète confirme le démarrage (1 coup) et l'enregistrement réussi (2 coups).")
                 }
