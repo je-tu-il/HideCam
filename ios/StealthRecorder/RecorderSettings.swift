@@ -79,6 +79,8 @@ nonisolated enum RecorderSettingsKeys {
     static let step2Action: String = "recorder.step2Action"
     static let step3Action: String = "recorder.step3Action"
     static let showGallery: String = "recorder.showGallery"
+    static let enable2048Decoy: String = "recorder.enable2048Decoy"
+    static let decoyAction: String = "recorder.decoyAction"
 }
 
 nonisolated struct RecorderSettings: Sendable {
@@ -87,12 +89,16 @@ nonisolated struct RecorderSettings: Sendable {
     let showInFiles: Bool
     let stepActions: [Int: RecordingAction]
     let showGallery: Bool
+    let enable2048Decoy: Bool
+    let decoyAction: RecordingAction
 
     static func load(from defaults: UserDefaults = .standard) -> RecorderSettings {
         let videoQuality: VideoQuality = VideoQuality(rawValue: defaults.string(forKey: RecorderSettingsKeys.videoQuality) ?? "") ?? .high
         let saveDestination: SaveDestination = SaveDestination(rawValue: defaults.string(forKey: RecorderSettingsKeys.saveDestination) ?? "") ?? .documents
         let showInFiles: Bool = defaults.object(forKey: RecorderSettingsKeys.showInFiles) == nil ? true : defaults.bool(forKey: RecorderSettingsKeys.showInFiles)
         let showGallery: Bool = defaults.bool(forKey: RecorderSettingsKeys.showGallery)
+        let enable2048Decoy: Bool = defaults.object(forKey: RecorderSettingsKeys.enable2048Decoy) == nil ? true : defaults.bool(forKey: RecorderSettingsKeys.enable2048Decoy)
+        let decoyAction: RecordingAction = action(for: RecorderSettingsKeys.decoyAction, defaultAction: .backVideo, defaults: defaults)
 
         let actions: [Int: RecordingAction] = [
             0: action(for: RecorderSettingsKeys.step0Action, defaultAction: .audio, defaults: defaults),
@@ -106,7 +112,9 @@ nonisolated struct RecorderSettings: Sendable {
             saveDestination: saveDestination,
             showInFiles: showInFiles,
             stepActions: actions,
-            showGallery: showGallery
+            showGallery: showGallery,
+            enable2048Decoy: enable2048Decoy,
+            decoyAction: decoyAction
         )
     }
 

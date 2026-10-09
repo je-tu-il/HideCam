@@ -77,10 +77,33 @@ private struct VideoThumbnailView: View {
     }
 }
 
+// MARK: - Native Video Player via AVPlayerViewController
+
+private struct NativeVideoPlayer: UIViewControllerRepresentable {
+    let player: AVPlayer
+
+    func makeUIViewController(context: Context) -> AVPlayerViewController {
+        let controller = AVPlayerViewController()
+        controller.player = player
+        controller.showsPlaybackControls = true
+        controller.view.backgroundColor = .black
+        controller.updatesNowPlayingInfoCenter = false
+        return controller
+    }
+
+    func updateUIViewController(_ uiViewController: AVPlayerViewController, context: Context) {
+        if uiViewController.player !== player {
+            uiViewController.player = player
+        }
+    }
+}
+
 // MARK: - GalleryView
 
 struct GalleryView: View {
-    @Environment(\.dismiss) private var dismiss
+    @Binding var showGallery: Bool
+    @Binding var showSettings: Bool
+
     @Environment(\.modelContext) private var modelContext
     @Query(sort: \RecordingEntry.createdAt, order: .reverse) private var recordings: [RecordingEntry]
 
@@ -95,6 +118,11 @@ struct GalleryView: View {
     @State private var showShareSheet = false
     @State private var shareURL: URL?
 
+    init(showGallery: Binding<Bool> = .constant(true), showSettings: Binding<Bool> = .constant(false)) {
+        self._showGallery = showGallery
+        self._showSettings = showSettings
+    }
+
     var body: some View {
         NavigationStack {
             Group {
@@ -108,8 +136,11 @@ struct GalleryView: View {
             .navigationBarTitleDisplayMode(.large)
             .toolbar {
                 ToolbarItem(placement: .navigationBarTrailing) {
-                    Button("Fermer") { dismiss() }
-                        .fontWeight(.semibold)
+                    Button("Fermer") {
+                        showGallery = false
+                        showSettings = true
+                    }
+                    .fontWeight(.semibold)
                 }
             }
             .fullScreenCover(isPresented: $showPlayer) {
@@ -289,33 +320,37 @@ struct GalleryView: View {
     // MARK: - Video player sheet
 
     private var videoPlayerSheet: some View {
-        Group {
+        ZStack {
+            Color.black.ignoresSafeArea()
+
             if let player {
-                VideoPlayer(player: player)
-                    .edgesIgnoringSafeArea(.all)
-                    .overlay(alignment: .topLeading) {
+                NativeVideoPlayer(player: player)
+                    .ignoresSafeArea()
+                    .overlay(alignment: .topTrailing) {
                         Button {
                             player.pause()
                             self.player = nil
                             showPlayer = false
                         } label: {
                             Image(systemName: "xmark.circle.fill")
-                                .font(.title)
-                                .foregroundStyle(.white)
-                                .shadow(radius: 4)
+                                .font(.system(size: 30))
+                                .foregroundStyle(.white.opacity(0.85))
+                                .shadow(color: .black.opacity(0.6), radius: 4)
                         }
-                        .padding(24)
+                        .padding(.top, 44)
+                        .padding(.trailing, 20)
                     }
             }
         }
+        .preferredColorScheme(.dark)
     }
 
     // MARK: - Audio player sheet
 
     private var audioPlayerSheet: some View {
         ZStack {
-            Color(.systemBackground)
-                .edgesIgnoringSafeArea(.all)
+            Color(red: 0.11, green: 0.11, blue: 0.12)
+                .ignoresSafeArea()
 
             VStack(spacing: 28) {
                 HStack {
@@ -337,7 +372,7 @@ struct GalleryView: View {
 
                 ZStack {
                     Circle()
-                        .fill(Color.blue.opacity(0.12))
+                        .fill(Color.blue.opacity(0.2))
                         .frame(width: 120, height: 120)
 
                     Image(systemName: "waveform")
@@ -349,6 +384,7 @@ struct GalleryView: View {
                     Text(selectedRecording?.actionDisplayName ?? "Enregistrement Audio")
                         .font(.title2)
                         .fontWeight(.bold)
+                        .foregroundStyle(.white)
 
                     Text("\(selectedRecording?.formattedDate ?? "") à \(selectedRecording?.formattedTime ?? "")")
                         .font(.subheadline)
@@ -381,6 +417,7 @@ struct GalleryView: View {
                 Spacer()
             }
         }
+        .preferredColorScheme(.dark)
     }
 
     // MARK: - Actions
@@ -391,6 +428,9 @@ struct GalleryView: View {
 
         selectedRecording = entry
         isPlayingAudio = (entry.actionType == "audio")
+
+        try? AVAudioSession.sharedInstance().setCategory(.playback, mode: .moviePlayback)
+        try? AVAudioSession.sharedInstance().setActive(true)
 
         let player = AVPlayer(url: url)
         self.player = player

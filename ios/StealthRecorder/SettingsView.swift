@@ -15,6 +15,8 @@ struct SettingsView: View {
     @AppStorage(RecorderSettingsKeys.step2Action) private var step2Action: String = RecordingAction.backVideo.rawValue
     @AppStorage(RecorderSettingsKeys.step3Action) private var step3Action: String = RecordingAction.multiCam.rawValue
     @AppStorage(RecorderSettingsKeys.showInFiles) private var showInFiles: Bool = true
+    @AppStorage(RecorderSettingsKeys.enable2048Decoy) private var enable2048Decoy: Bool = true
+    @AppStorage(RecorderSettingsKeys.decoyAction) private var decoyAction: String = RecordingAction.backVideo.rawValue
 
     @State private var currentVolume: Float = AVAudioSession.sharedInstance().outputVolume
 
@@ -58,12 +60,35 @@ struct SettingsView: View {
                     Text("Accès rapide")
                 }
 
-                // Section 2: Paliers de volume
+                // Section 2: Camouflage Jeu 2048
+                Section("Camouflage Jeu 2048") {
+                    Toggle("Activer le leurre Jeu 2048", isOn: $enable2048Decoy)
+
+                    if enable2048Decoy {
+                        Picker("Caméra pendant le jeu", selection: $decoyAction) {
+                            ForEach(RecordingAction.allCases) { action in
+                                Text(action.title).tag(action.rawValue)
+                            }
+                        }
+
+                        NavigationLink {
+                            Game2048View()
+                                .navigationTitle("Jeu 2048")
+                                .navigationBarTitleDisplayMode(.inline)
+                        } label: {
+                            Label("Tester le jeu 2048", systemImage: "gamecontroller.fill")
+                        }
+                    }
+                } footer: {
+                    Text("Lorsque le volume dépasse le palier 3 (crans 4 à 15), l'écran affiche une vraie partie de 2048 tout en filmant silencieusement en arrière-plan.")
+                }
+
+                // Section 3: Paliers de volume
                 Section {
-                    stepPicker(title: "Palier 0 (vol. 0% - Muet)", selection: $step0Action)
-                    stepPicker(title: "Palier 1 (vol. 1% – 7%)", selection: $step1Action)
-                    stepPicker(title: "Palier 2 (vol. 8% – 13%)", selection: $step2Action)
-                    stepPicker(title: "Palier 3 (vol. 14% – 94%)", selection: $step3Action)
+                    stepPicker(title: "Palier 0 (vol. 0% - 0 cran)", selection: $step0Action)
+                    stepPicker(title: "Palier 1 (1 cran, ~6%)", selection: $step1Action)
+                    stepPicker(title: "Palier 2 (2 crans, ~12%)", selection: $step2Action)
+                    stepPicker(title: "Palier 3 (3 crans, 1 cran unique)", selection: $step3Action)
 
                     HStack {
                         Text("Volume actuel")
@@ -73,12 +98,12 @@ struct SettingsView: View {
                             .foregroundStyle(.secondary)
                     }
                 } header: {
-                    Text("Actions par palier de volume")
+                    Text("Paliers de volume matériel (Écran noir)")
                 } footer: {
-                    Text("Le volume du téléphone au moment du lancement détermine automatiquement le mode d'enregistrement.")
+                    Text("Le palier 3 occupe exactement 1 barre de volume. Au-dessus, le jeu 2048 prend le relais.")
                 }
 
-                // Section 3: Destination & Qualité
+                // Section 4: Destination & Qualité
                 Section("Qualité et stockage") {
                     Picker("Qualité vidéo", selection: $videoQuality) {
                         ForEach(VideoQuality.allCases) { quality in
@@ -95,12 +120,14 @@ struct SettingsView: View {
                     Toggle("Visible dans l'app Fichiers", isOn: $showInFiles)
                 }
 
-                // Section 4: Fonctionnement discret
+                // Section 5: Fonctionnement discret
                 Section("Fonctionnement discret") {
-                    Label("Écran noir inerte : aucune réaction au toucher", systemImage: "hand.raised.slash.fill")
-                    Label("Changer le volume : démarre l'enregistrement selon le palier", systemImage: "speaker.wave.2.fill")
+                    Label("Écran noir inerte : aucune réaction tactile sur paliers 0 à 3", systemImage: "hand.raised.slash.fill")
+                    Label("Jeu 2048 jouable : s'affiche dès le 4ème cran de volume", systemImage: "gamecontroller.fill")
+                    Label("Changement de volume : bascule instantanément l'action", systemImage: "speaker.wave.2.fill")
                     Label("Mise en veille : sauvegarde automatique immédiate", systemImage: "moon.fill")
-                    Label("Son à fond (100%) : accès unique aux réglages", systemImage: "speaker.wave.3.fill")
+                    Label("Retour sur l'app : relance automatique de l'enregistrement", systemImage: "arrow.clockwise.circle.fill")
+                    Label("Son à fond (100%) : accès unique à cette configuration", systemImage: "speaker.wave.3.fill")
                 }
             }
             .navigationTitle("Configuration")
@@ -121,14 +148,18 @@ struct SettingsView: View {
 
     private var currentTierText: String {
         switch currentVolume {
-        case ..<0.01:
-            return "Palier 0"
-        case 0.01..<0.075:
-            return "Palier 1"
-        case 0.075..<0.135:
-            return "Palier 2"
+        case ..<0.04:
+            return "Palier 0 (Écran noir)"
+        case 0.04..<0.10:
+            return "Palier 1 (Écran noir)"
+        case 0.10..<0.16:
+            return "Palier 2 (Écran noir)"
+        case 0.16..<0.22:
+            return "Palier 3 (1 cran, Écran noir)"
+        case 0.22..<0.98:
+            return enable2048Decoy ? "Jeu 2048 (Leurre actif)" : "Écran noir"
         default:
-            return "Palier 3"
+            return "100% (Réglages)"
         }
     }
 

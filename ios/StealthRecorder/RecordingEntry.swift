@@ -40,16 +40,24 @@ final class RecordingEntry {
             return directURL
         }
         let docs = FileManager.default.urls(for: .documentDirectory, in: .userDomainMask).first!
-            .appendingPathComponent("Recordings", isDirectory: true)
+        let directDoc = docs.appendingPathComponent(fileName)
+        if FileManager.default.fileExists(atPath: directDoc.path) {
+            return directDoc
+        }
+        let subDoc = docs.appendingPathComponent("Recordings", isDirectory: true)
             .appendingPathComponent(fileName)
-        if FileManager.default.fileExists(atPath: docs.path) {
-            return docs
+        if FileManager.default.fileExists(atPath: subDoc.path) {
+            return subDoc
         }
         let appSupport = FileManager.default.urls(for: .applicationSupportDirectory, in: .userDomainMask).first!
-            .appendingPathComponent("Recordings", isDirectory: true)
+        let directAppSupport = appSupport.appendingPathComponent(fileName)
+        if FileManager.default.fileExists(atPath: directAppSupport.path) {
+            return directAppSupport
+        }
+        let subAppSupport = appSupport.appendingPathComponent("Recordings", isDirectory: true)
             .appendingPathComponent(fileName)
-        if FileManager.default.fileExists(atPath: appSupport.path) {
-            return appSupport
+        if FileManager.default.fileExists(atPath: subAppSupport.path) {
+            return subAppSupport
         }
         return directURL
     }

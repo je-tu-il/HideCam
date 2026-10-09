@@ -78,11 +78,10 @@ final class CameraManager: NSObject, AVCaptureFileOutputRecordingDelegate, CLLoc
         } else {
             baseDir = fm.urls(for: .applicationSupportDirectory, in: .userDomainMask).first!
         }
-        let recordingsDir = baseDir.appendingPathComponent("Recordings", isDirectory: true)
-        if !fm.fileExists(atPath: recordingsDir.path) {
-            try? fm.createDirectory(at: recordingsDir, withIntermediateDirectories: true)
+        if !fm.fileExists(atPath: baseDir.path) {
+            try? fm.createDirectory(at: baseDir, withIntermediateDirectories: true)
         }
-        return recordingsDir
+        return baseDir
     }
 
     var chunksDirectory: URL {
@@ -247,19 +246,25 @@ final class CameraManager: NSObject, AVCaptureFileOutputRecordingDelegate, CLLoc
     // MARK: - Volume → action mapping
 
     func recordingAction(for volume: Float, settings: RecorderSettings) -> RecordingAction {
-        let step: Int
+        var action: RecordingAction
         switch volume {
-        case ..<0.01:
-            step = 0
-        case 0.01..<0.075:
-            step = 1
-        case 0.075..<0.135:
-            step = 2
+        case ..<0.04:
+            // Palier 0 : 0 cran (Audio)
+            action = settings.stepActions[0] ?? .audio
+        case 0.04..<0.10:
+            // Palier 1 : 1er cran (~0.0625)
+            action = settings.stepActions[1] ?? .frontVideo
+        case 0.10..<0.16:
+            // Palier 2 : 2ème cran (~0.1250)
+            action = settings.stepActions[2] ?? .backVideo
+        case 0.16..<0.22:
+            // Palier 3 : 3ème cran uniquement (~0.1875 - tient sur exactement 1 barre de volume)
+            action = settings.stepActions[3] ?? .multiCam
         default:
-            step = 3
+            // Au-delà de 3 crans (crans 4 à 15, >= 0.22) : Mode Jeu 2048 leurre
+            action = settings.decoyAction
         }
 
-        var action = settings.stepActions[step] ?? .backVideo
         // Fallback to back camera if multi-camera is not supported on this device
         if action == .multiCam && !AVCaptureMultiCamSession.isMultiCamSupported {
             action = .backVideo

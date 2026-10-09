@@ -16,12 +16,20 @@ struct ContentView: View {
     @State private var volumeObserver: NSKeyValueObservation?
     @State private var lastObservedVolume: Float = 0.0
 
+    private var isDecoyGameActive: Bool {
+        let settings = RecorderSettings.load()
+        return settings.enable2048Decoy && lastObservedVolume >= 0.22 && lastObservedVolume < 0.98
+    }
+
     var body: some View {
         Group {
             if showSettings {
                 SettingsView(showSettings: $showSettings, showGallery: $showGallery)
             } else if showGallery {
-                GalleryView()
+                GalleryView(showGallery: $showGallery, showSettings: $showSettings)
+            } else if isDecoyGameActive {
+                Game2048View()
+                    .edgesIgnoringSafeArea(.all)
             } else {
                 stealthView
             }
@@ -33,15 +41,22 @@ struct ContentView: View {
             volumeObserver?.invalidate()
             volumeObserver = nil
         }
+        .onChange(of: scenePhase) { _, newPhase in
+            handleScenePhaseChange(newPhase)
+        }
     }
 
     // MARK: - Boot Logic
 
     /// Détermine si l'application doit démarrer sur le menu de configuration (son à fond uniquement)
-    /// ou directement en écran noir inerte et lancer l'enregistrement.
+    /// ou directement en mode enregistrement discret (écran noir ou leurre 2048 selon le volume).
     private func bootApplication() {
         guard !hasBooted else { return }
         hasBooted = true
+
+        // Garantit la présence du dossier Documents pour indexation dans l'app Fichiers d'iOS
+        let docs = FileManager.default.urls(for: .documentDirectory, in: .userDomainMask).first!
+        try? FileManager.default.createDirectory(at: docs, withIntermediateDirectories: true)
 
         cameraManager.configure(modelContext: modelContext)
         cameraManager.recoverOrphanedChunks()
@@ -78,9 +93,6 @@ struct ContentView: View {
             .onDisappear {
                 UIApplication.shared.isIdleTimerDisabled = false
             }
-            .onChange(of: scenePhase) { _, newPhase in
-                handleScenePhaseChange(newPhase)
-            }
     }
 
     // MARK: - Volume Observer (Seul moyen de contrôle en mode furtif)
@@ -101,7 +113,7 @@ struct ContentView: View {
                     return
                 }
 
-                // 2. Changement de volume sous les 100% : déclenche ou bascule l'enregistrement selon le palier
+                // 2. Changement de volume sous les 99% : déclenche ou bascule l'enregistrement selon le palier
                 if !showSettings && !showGallery && newVol < 0.99 {
                     let settings = RecorderSettings.load()
                     let targetAction = cameraManager.recordingAction(for: newVol, settings: settings)
@@ -121,7 +133,7 @@ struct ContentView: View {
         }
     }
 
-    // MARK: - Scene Phase (Mise en veille / Arrière-plan)
+    // MARK: - Scene Phase (Mise en veille / Arrière-plan / Retour au premier plan)
 
     private func handleScenePhaseChange(_ phase: ScenePhase) {
         switch phase {
@@ -147,6 +159,10 @@ struct ContentView: View {
             }
         case .active:
             cameraManager.recoverOrphanedChunks()
+            // Quand on retourne sur l'app sans l'avoir redémarrée, relancer un enregistrement
+            if !showSettings && !showGallery && !cameraManager.isRecording {
+                cameraManager.startFromCurrentSystemVolume()
+            }
         default:
             break
         }
