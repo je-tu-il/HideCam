@@ -1,33 +1,18 @@
 import AVFoundation
 import SwiftData
 import SwiftUI
+import UIKit
 
 struct ContentView: View {
     @Environment(\.modelContext) private var modelContext
     @Environment(\.scenePhase) private var scenePhase
-
-    @State private var cameraManager = CameraManager()
-
+    @AppStorage("recorder.captureMode") private var action = RecordingAction.backVideo
+    @AppStorage("recorder.includeLocation") private var includeLocation = false
+    @State private var camera = CameraManager()
     @State private var showSettings = false
     @State private var showGallery = false
-    @State private var hasBooted = false
-
-    // Volume observation
-    @State private var volumeObserver: NSKeyValueObservation?
-    @State private var lastObservedVolume: Float = 0.0
-    @State private var runtimeGameOverride: Bool? = nil
-
-    private var isDecoyGameActive: Bool {
-        let settings = RecorderSettings.load()
-        guard settings.enable2048Decoy else { return false }
-        if let override = runtimeGameOverride {
-            return override && lastObservedVolume < 0.99
-        }
-        if settings.alwaysShowGameDecoy {
-            return lastObservedVolume < 0.99
-        }
-        return lastObservedVolume >= 0.22 && lastObservedVolume < 0.98
-    }
+    @State private var working = false
+    @State private var errorMessage: String?
 
     var body: some View {
         Group {
@@ -35,156 +20,90 @@ struct ContentView: View {
                 SettingsView(showSettings: $showSettings, showGallery: $showGallery)
             } else if showGallery {
                 GalleryView(showGallery: $showGallery, showSettings: $showSettings)
-            } else if isDecoyGameActive {
-                Game2048View(onToggleBlackScreen: {
-                    runtimeGameOverride = false
-                })
-                .edgesIgnoringSafeArea(.all)
             } else {
-                stealthView
+                NavigationStack {
+                    Form {
+                        Section {
+                            Picker("Mode", selection: $action) {
+                                ForEach(RecordingAction.allCases) { mode in
+                                    Text(mode.title).tag(mode)
+                                }
+                            }
+                            Toggle("Joindre la localisation", isOn: $includeLocation)
+                        }
+                        .disabled(working || camera.isRecording)
+
+                        Section {
+                            if let started = camera.recordingStartedAt, camera.isRecording {
+                                Label {
+                                    Text(started, style: .timer).monospacedDigit()
+                                } icon: {
+                                    Image(systemName: "record.circle.fill")
+                                }
+                                .foregroundStyle(.red)
+                                .accessibilityLabel("Enregistrement en cours")
+                            }
+                            Button(camera.isRecording ? "Arrêter et sauvegarder" : "Démarrer l’enregistrement",
+                                   systemImage: camera.isRecording ? "stop.circle" : "record.circle",
+                                   action: toggle)
+                                .disabled(working)
+                            if working { ProgressView() }
+                        } header: {
+                            Text(camera.isRecording ? "Enregistrement en cours" : "Enregistrement")
+                        }
+
+                        Section {
+                            Button("Enregistrements", systemImage: "film") { showGallery = true }
+                            Button("Réglages", systemImage: "gearshape") { showSettings = true }
+                        }
+                        .disabled(working || camera.isRecording)
+                    }
+                    .navigationTitle("Enregistreur")
+                }
             }
         }
         .onAppear {
-            bootApplication()
+            camera.configure(modelContext: modelContext)
+            camera.recoverOrphanedChunks()
         }
-        .onDisappear {
-            volumeObserver?.invalidate()
-            volumeObserver = nil
+        .onChange(of: scenePhase) {
+            if scenePhase == .background && camera.isRecording && !working { saveInBackground() }
         }
-        .onChange(of: scenePhase) { _, newPhase in
-            handleScenePhaseChange(newPhase)
+        .alert("Enregistrement indisponible", isPresented: Binding(
+            get: { errorMessage != nil },
+            set: { if !$0 { errorMessage = nil } }
+        )) {
+            Button("OK", role: .cancel) { errorMessage = nil }
+        } message: {
+            Text(errorMessage ?? "")
         }
     }
 
-    // MARK: - Boot Logic
-
-    /// Détermine si l'application doit démarrer sur le menu de configuration (son à fond uniquement)
-    /// ou directement en mode enregistrement discret (écran noir ou leurre 2048 selon le volume).
-    private func bootApplication() {
-        guard !hasBooted else { return }
-        hasBooted = true
-
-        // Garantit la présence du dossier Documents pour indexation dans l'app Fichiers d'iOS
-        let docs = FileManager.default.urls(for: .documentDirectory, in: .userDomainMask).first!
-        try? FileManager.default.createDirectory(at: docs, withIntermediateDirectories: true)
-
-        cameraManager.configure(modelContext: modelContext)
-        cameraManager.recoverOrphanedChunks()
-
-        // Active d'abord la session audio pour lire le volume matériel réel
-        let audioSession = AVAudioSession.sharedInstance()
-        try? audioSession.setCategory(.playAndRecord, mode: .videoRecording, options: [.defaultToSpeaker, .allowBluetooth])
-        try? audioSession.setActive(true, options: .notifyOthersOnDeactivation)
-
-        let initialVolume = audioSession.outputVolume
-        lastObservedVolume = initialVolume
-
-        // Ne démarre sur les réglages QUE SI le son est à fond (100% / >= 0.99)
-        if initialVolume >= 0.99 {
-            showSettings = true
-        } else {
-            showSettings = false
-            cameraManager.startFromCurrentSystemVolume()
-        }
-
-        setupVolumeObserver()
-    }
-
-    // MARK: - Stealth Black Screen View (Aucune interaction tactile)
-
-    private var stealthView: some View {
-        Color.black
-            .edgesIgnoringSafeArea(.all)
-            .statusBarHidden(true)
-            .persistentSystemOverlays(.hidden)
-            .onAppear {
-                UIApplication.shared.isIdleTimerDisabled = true
-            }
-            .onDisappear {
-                UIApplication.shared.isIdleTimerDisabled = false
-            }
-            .onTapGesture(count: 2) {
-                if RecorderSettings.load().enable2048Decoy {
-                    runtimeGameOverride = true
+    private func toggle() {
+        guard !working else { return }
+        working = true
+        Task { @MainActor in
+            defer { working = false }
+            do {
+                if camera.isRecording { await camera.stopRecordingAndFinalize() }
+                else {
+                    try await camera.startRecording(action: action, includeLocation: includeLocation)
+                    if scenePhase == .background { await camera.stopRecordingAndFinalize() }
                 }
-            }
-    }
-
-    // MARK: - Volume Observer (Seul moyen de contrôle en mode furtif)
-
-    private func setupVolumeObserver() {
-        volumeObserver = AVAudioSession.sharedInstance().observe(\.outputVolume, options: [.new]) { session, change in
-            guard let newVol = change.newValue else { return }
-            Task { @MainActor in
-                let previous = lastObservedVolume
-                lastObservedVolume = newVol
-
-                // 1. Son mis à fond (100% / >= 0.99) : ouvrir les réglages
-                if newVol >= 0.99 && previous < 0.99 && !showSettings && !showGallery {
-                    if cameraManager.isRecording {
-                        await cameraManager.stopRecordingAndFinalize()
-                    }
-                    runtimeGameOverride = nil
-                    showSettings = true
-                    return
-                }
-
-                // 2. Changement de volume sous les 99% : déclenche ou bascule l'enregistrement selon le palier
-                if !showSettings && !showGallery && newVol < 0.99 {
-                    let settings = RecorderSettings.load()
-                    let targetAction = cameraManager.recordingAction(for: newVol, settings: settings)
-
-                    if cameraManager.isRecording {
-                        if cameraManager.currentAction != targetAction {
-                            // Bascule de palier : finalise l'ancien et lance le nouveau
-                            await cameraManager.stopRecordingAndFinalize()
-                            cameraManager.startFromCurrentSystemVolume()
-                        }
-                    } else {
-                        // Démarre l'enregistrement
-                        cameraManager.startFromCurrentSystemVolume()
-                    }
-                }
+            } catch {
+                errorMessage = error.localizedDescription
             }
         }
     }
 
-    // MARK: - Scene Phase (Mise en veille / Arrière-plan / Retour au premier plan)
-
-    private func handleScenePhaseChange(_ phase: ScenePhase) {
-        switch phase {
-        case .background:
-            // Dès que le téléphone est mis en veille (bouton power / verrouillage),
-            // on finalise et sauvegarde immédiatement l'enregistrement en cours via tâche d'arrière-plan
-            if cameraManager.isRecording {
-                var bgTask: UIBackgroundTaskIdentifier = .invalid
-                bgTask = UIApplication.shared.beginBackgroundTask(withName: "StealthRecorder.SaveOnSleep") {
-                    if bgTask != .invalid {
-                        UIApplication.shared.endBackgroundTask(bgTask)
-                        bgTask = .invalid
-                    }
-                }
-
-                Task {
-                    await cameraManager.stopRecordingAndFinalize()
-                    if bgTask != .invalid {
-                        UIApplication.shared.endBackgroundTask(bgTask)
-                        bgTask = .invalid
-                    }
-                }
-            }
-        case .active:
-            cameraManager.recoverOrphanedChunks()
-            // Quand on retourne sur l'app sans l'avoir redémarrée, relancer un enregistrement
-            if !showSettings && !showGallery && !cameraManager.isRecording {
-                cameraManager.startFromCurrentSystemVolume()
-            }
-        default:
-            break
+    private func saveInBackground() {
+        working = true
+        let application = UIApplication.shared
+        let task = application.beginBackgroundTask(withName: "Finalize recording")
+        Task { @MainActor in
+            await camera.stopRecordingAndFinalize()
+            working = false
+            if task != .invalid { application.endBackgroundTask(task) }
         }
     }
-}
-
-#Preview {
-    ContentView()
 }

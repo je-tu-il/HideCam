@@ -99,46 +99,11 @@ final class CameraManager: NSObject, AVCaptureFileOutputRecordingDelegate, CLLoc
         self.modelContext = modelContext
     }
 
-    func toggleRecording() async {
-        if isRecording {
-            await stopRecordingAndFinalize()
-            await MainActor.run { HapticHelper.recordStopped() }
-        } else {
-            let settings = RecorderSettings.load()
-            let volume = AVAudioSession.sharedInstance().outputVolume
-            let action = recordingAction(for: volume, settings: settings)
-            do {
-                try await requestCapturePermissions(for: action)
-                try await configureAndStart(action: action, settings: settings)
-                await MainActor.run { HapticHelper.recordStarted() }
-            } catch {
-                debugPrint("Failed to toggle start recording: \(error)")
-                await MainActor.run { HapticHelper.error() }
-            }
-        }
-    }
-
-    func startFromCurrentSystemVolume() {
+    func startRecording(action: RecordingAction, includeLocation: Bool) async throws {
         guard !isRecording else { return }
-        Task {
-            do {
-                let settings = RecorderSettings.load()
-                saveDestination = settings.saveDestination
-                showInFiles = settings.showInFiles
-                let volume = AVAudioSession.sharedInstance().outputVolume
-                let action = recordingAction(for: volume, settings: settings)
-                try await requestCapturePermissions(for: action)
-                try await configureAndStart(action: action, settings: settings)
-                await MainActor.run {
-                    HapticHelper.recordStarted()
-                }
-            } catch {
-                debugPrint("CameraManager configuration failed: \(error.localizedDescription)")
-                await MainActor.run {
-                    HapticHelper.error()
-                }
-            }
-        }
+        try await requestCapturePermissions(for: action)
+        guard UIApplication.shared.applicationState != .background else { throw CancellationError() }
+        try await configureAndStart(action: action, settings: RecorderSettings.load(), includeLocation: includeLocation)
     }
 
     /// Stops chunk rotation, waits for delegates to finalize, merges, and saves.
@@ -245,47 +210,21 @@ final class CameraManager: NSObject, AVCaptureFileOutputRecordingDelegate, CLLoc
 
     // MARK: - Volume → action mapping
 
-    func recordingAction(for volume: Float, settings: RecorderSettings) -> RecordingAction {
-        var action: RecordingAction
-        switch volume {
-        case ..<0.04:
-            // Palier 0 : 0 cran (Audio)
-            action = settings.stepActions[0] ?? .audio
-        case 0.04..<0.10:
-            // Palier 1 : 1er cran (~0.0625)
-            action = settings.stepActions[1] ?? .frontVideo
-        case 0.10..<0.16:
-            // Palier 2 : 2ème cran (~0.1250)
-            action = settings.stepActions[2] ?? .backVideo
-        case 0.16..<0.22:
-            // Palier 3 : 3ème cran uniquement (~0.1875 - tient sur exactement 1 barre de volume)
-            action = settings.stepActions[3] ?? .multiCam
-        default:
-            // Au-delà de 3 crans (crans 4 à 15, >= 0.22) : Mode Jeu 2048 leurre
-            action = settings.decoyAction
-        }
-
-        // Fallback to back camera if multi-camera is not supported on this device
-        if action == .multiCam && !AVCaptureMultiCamSession.isMultiCamSupported {
-            action = .backVideo
-        }
-        return action
-    }
-
-    // MARK: - Session configuration & start
-
-    private func configureAndStart(action: RecordingAction, settings: RecorderSettings) async throws {
+    private func configureAndStart(action: RecordingAction, settings: RecorderSettings, includeLocation: Bool) async throws {
         currentAction = action
         saveDestination = settings.saveDestination
         showInFiles = settings.showInFiles
 
         let audioSession = AVAudioSession.sharedInstance()
         try audioSession.setCategory(.playAndRecord, mode: .videoRecording, options: [.defaultToSpeaker, .allowBluetooth])
-        try audioSession.setActive(true, options: .notifyOthersOnDeactivation)
+        try audioSession.setActive(true)
 
-        locationManager.delegate = self
-        locationManager.requestWhenInUseAuthorization()
-        locationManager.startUpdatingLocation()
+        recordingLocation = nil
+        if includeLocation {
+            locationManager.delegate = self
+            locationManager.requestWhenInUseAuthorization()
+            locationManager.requestLocation()
+        }
 
         let sessionID = UUID()
 
@@ -815,6 +754,10 @@ final class CameraManager: NSObject, AVCaptureFileOutputRecordingDelegate, CLLoc
     }
 
     // MARK: - CLLocationManagerDelegate
+
+    nonisolated func locationManager(_ manager: CLLocationManager, didFailWithError error: Error) {
+        // Location is optional. Capture and finalization continue when no fix is available.
+    }
 
     nonisolated func locationManager(_ manager: CLLocationManager, didUpdateLocations locations: [CLLocation]) {
         Task { @MainActor in
