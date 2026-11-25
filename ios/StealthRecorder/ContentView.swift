@@ -8,6 +8,9 @@ struct ContentView: View {
     @Environment(\.scenePhase) private var scenePhase
     @AppStorage("recorder.captureMode") private var action = RecordingAction.backVideo
     @AppStorage("recorder.includeLocation") private var includeLocation = false
+    @AppStorage("recorder.volumeLaunch") private var volumeLaunch = false
+    @AppStorage("recorder.recordingDisplay") private var recordingDisplay = RecordingDisplay.controls
+    @State private var didHandleLaunch = false
     @State private var camera = CameraManager()
     @State private var showSettings = false
     @State private var showGallery = false
@@ -33,16 +36,20 @@ struct ContentView: View {
                         )
                         .ignoresSafeArea()
 
-                        ScrollView(showsIndicators: false) {
-                            VStack(spacing: 18) {
-                                statusHeroCard
-                                captureModeGrid
-                                optionsCard
-                                primaryCaptureButton
-                                quickNavigationRow
+                        if camera.isRecording && recordingDisplay != .controls {
+                            recordingOverlay
+                        } else {
+                            ScrollView(showsIndicators: false) {
+                                VStack(spacing: 18) {
+                                    if camera.isRecording { statusHeroCard }
+                                    captureModeGrid
+                                    optionsCard
+                                    primaryCaptureButton
+                                    quickNavigationRow
+                                }
+                                .padding(.horizontal, 18)
+                                .padding(.vertical, 14)
                             }
-                            .padding(.horizontal, 18)
-                            .padding(.vertical, 14)
                         }
                     }
                     .navigationTitle("HideCam")
@@ -54,8 +61,10 @@ struct ContentView: View {
         .onAppear {
             camera.configure(modelContext: modelContext)
             camera.recoverOrphanedChunks()
+            handleVolumeLaunch()
         }
         .onChange(of: scenePhase) {
+            handleVolumeLaunch()
             if scenePhase == .background && camera.isRecording && !working { saveInBackground() }
         }
         .alert("Enregistrement indisponible", isPresented: Binding(
@@ -66,6 +75,22 @@ struct ContentView: View {
         } message: {
             Text(errorMessage ?? "")
         }
+    }
+
+    private var recordingOverlay: some View {
+        VStack(spacing: 8) {
+            if recordingDisplay == .game {
+                Game2048View()
+            } else {
+                Spacer()
+            }
+            Button("Arrêter l’enregistrement", systemImage: "stop.circle.fill", action: toggle)
+                .foregroundStyle(.red)
+                .padding()
+                .disabled(working)
+        }
+        .frame(maxWidth: .infinity, maxHeight: .infinity)
+        .background(Color.black)
     }
 
     private var statusHeroCard: some View {
@@ -80,7 +105,7 @@ struct ContentView: View {
             }
 
             VStack(alignment: .leading, spacing: 4) {
-                Text(camera.isRecording ? "Enregistrement actif" : "Prêt pour la capture")
+                Text("Enregistrement actif")
                     .font(.headline.weight(.bold))
                     .foregroundStyle(.white)
                 if let started = camera.recordingStartedAt, camera.isRecording {
@@ -253,6 +278,17 @@ struct ContentView: View {
         case .backVideo: return "camera.fill"
         case .multiCam: return "camera.on.rectangle.fill"
         }
+    }
+
+    private func handleVolumeLaunch() {
+        guard !didHandleLaunch, scenePhase == .active else { return }
+        didHandleLaunch = true
+        guard volumeLaunch else { return }
+        let volume = AVAudioSession.sharedInstance().outputVolume
+        let step = Int((volume * 16).rounded())
+        guard let launchAction = RecorderSettings.load().stepActions[step] else { return }
+        action = launchAction
+        toggle()
     }
 
     private func toggle() {

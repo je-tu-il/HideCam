@@ -24,6 +24,20 @@ nonisolated enum RecordingAction: String, CaseIterable, Identifiable, Sendable {
     }
 }
 
+enum RecordingDisplay: String, CaseIterable, Identifiable {
+    case controls, dark, game
+
+    var id: Self { self }
+
+    var title: String {
+        switch self {
+        case .controls: "Commandes"
+        case .dark: "Écran sombre"
+        case .game: "2048"
+        }
+    }
+}
+
 nonisolated enum VideoQuality: String, CaseIterable, Identifiable, Sendable {
     case low
     case medium
