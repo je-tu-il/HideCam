@@ -1,22 +1,6 @@
-# HideCam — tâches issues du retour utilisateur
-
-## Interface
-- [ ] Revoir les écrans d’enregistrement et de réglages pour les harmoniser avec l’accueil.
-- [x] Retirer le bloc « Prêt pour la capture » de l’accueil.
-
-## Démarrage
-- [ ] Rétablir une action de lancement selon le niveau du volume et la tester sur iPhone.
-- [ ] Au volume maximal, ouvrir l’accueil avec accès aux réglages, aux enregistrements et au réglage de localisation.
-- [ ] Au niveau 0, enregistrer le son, avec la localisation si l’option est activée.
-- [ ] Au niveau 1, enregistrer avec la caméra avant.
-- [ ] Au niveau 2, enregistrer avec la caméra arrière.
-- [ ] Au niveau 3, enregistrer avec les deux caméras sur les appareils compatibles.
-- [ ] Prévoir l’affichage noir demandé pendant la capture et vérifier le retour aux commandes.
-- [ ] Rendre la correspondance volume/action modifiable depuis les réglages.
-
-## Personnalisation
-- [ ] Ajouter le mode leurre demandé avec un mini-jeu de type sudoku pendant la capture.
-- [ ] Proposer des icônes d’application alternatives, comme sudoku ou réglages.
-
-## Modifications à valider
-Lancement par profil de volume et affichages sombre ou 2048 implémentés. Le réglage est désactivé par défaut. Tester les pas de volume et les modes caméra sur iPhone. Pendant la capture, la commande d’arrêt reste visible.
+Si le fichier est supprimé le supprime de l'historique
+Si je metenregistrer dans phot ne pas enregistrer autre part
+Ecran de parametre pas dans la meme DA 
+Une fois que je relance apres un enregistrement ca me remet sur l'acceuil alors que ca devrais déjà verifier le volume et adapter l'ecran
+Pas de changement d'icone dispo pour l'instant ajouter
+Vraiment faire tout noir sans bouton arreter l'enregistrement quitter l'app arrete et enregistre le fichier idem sur 2048 on ne doit rien voir d'autre que le jeu
