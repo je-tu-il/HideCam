@@ -78,19 +78,35 @@ struct ContentView: View {
     }
 
     private var recordingOverlay: some View {
-        VStack(spacing: 8) {
+        Group {
             if recordingDisplay == .game {
-                Game2048View()
+                VStack(spacing: 8) {
+                    Game2048View()
+                    Button("Arrêter l’enregistrement", systemImage: "stop.circle.fill", action: toggle)
+                        .foregroundStyle(.red)
+                        .padding()
+                        .disabled(working)
+                }
+                .frame(maxWidth: .infinity, maxHeight: .infinity)
+                .background(Color.black)
             } else {
-                Spacer()
+                ZStack(alignment: .bottomTrailing) {
+                    Color.black
+                        .ignoresSafeArea()
+                        .contentShape(Rectangle())
+                        .onLongPressGesture(minimumDuration: 1.0) {
+                            if !working { toggle() }
+                        }
+                    Button(action: toggle) {
+                        Color.black
+                            .frame(width: 1, height: 1)
+                            .opacity(0.01)
+                    }
+                    .disabled(working)
+                    .accessibilityLabel("Arrêter l’enregistrement")
+                }
             }
-            Button("Arrêter l’enregistrement", systemImage: "stop.circle.fill", action: toggle)
-                .foregroundStyle(.red)
-                .padding()
-                .disabled(working)
         }
-        .frame(maxWidth: .infinity, maxHeight: .infinity)
-        .background(Color.black)
     }
 
     private var statusHeroCard: some View {
